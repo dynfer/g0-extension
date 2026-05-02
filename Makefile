@@ -150,7 +150,7 @@ UDEFS =
 UADEFS =
 
 # List all user directories here
-UINCDIR = source
+UINCDIR =
 
 # List the user directory to look for the libraries here
 ULIBDIR =
@@ -177,6 +177,15 @@ include $(RULESPATH)/rules.mk
 ##############################################################################
 # Custom rules
 #
+
+.PHONY: for_fome_image
+
+for_fome_image: build/$(PROJECT).bin
+	mkdir -p for_fome
+	xxd -i build/$(PROJECT).bin \
+		| sed 's/^unsigned/static const unsigned/' \
+		> for_fome/g0_firmware_image.h
+	printf 'Generated from %s\n' 'build/$(PROJECT).bin' > for_fome/readme.txt
 
 #
 # Custom rules
