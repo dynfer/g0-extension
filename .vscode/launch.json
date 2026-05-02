@@ -1,0 +1,46 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "STM32G0: Attach",
+      "type": "cortex-debug",
+      "request": "attach",
+      "cwd": "${workspaceFolder}",
+      "executable": "${workspaceFolder}/build/g0-extension.elf",
+      "servertype": "openocd",
+      "gdbTarget": "localhost:3333",
+      "gdbPath": "arm-none-eabi-gdb",
+      "configFiles": [
+        "interface/stlink.cfg",
+        "target/stm32g0x.cfg"
+      ],
+      "preAttachCommands": [
+        "monitor reset halt"
+      ],
+      "postAttachCommands": [
+        "monitor arm semihosting enable"
+      ]
+    },
+    {
+      "name": "STM32G0: Build, Upload and Debug",
+      "type": "cortex-debug",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "executable": "${workspaceFolder}/build/g0-extension.elf",
+      "servertype": "openocd",
+      "gdbPath": "arm-none-eabi-gdb",
+      "preLaunchTask": "make",
+      "runToEntryPoint": "main",
+      "configFiles": [
+        "interface/stlink.cfg",
+        "target/stm32g0x.cfg"
+      ],
+      "preLaunchCommands": [
+        "monitor reset halt"
+      ],
+      "postLaunchCommands": [
+        "monitor arm semihosting enable"
+      ]
+    }
+  ]
+}

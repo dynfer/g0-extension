@@ -109,12 +109,11 @@ include $(CHIBIOS)/tools/mk/autobuild.mk
 #include $(CHIBIOS)/os/various/shell/shell.mk
 
 # Define linker script file here
-LDSCRIPT= $(STARTUPLD)/STM32G071xB.ld
+LDSCRIPT= $(BOARDDIR)/STM32G071xB.ld
 
 # C sources that can be compiled in ARM or THUMB mode depending on the global
 # setting.
-CSRC = $(ALLCSRC) \
-       $(CONFDIR)/portab.c
+CSRC = $(ALLCSRC)
 
 # C++ sources that can be compiled in ARM or THUMB mode depending on the global
 # setting.
