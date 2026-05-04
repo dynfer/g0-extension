@@ -9,7 +9,7 @@
 
 namespace {
 
-constexpr uint32_t APP_VERSION = 1U;
+constexpr uint32_t APP_VERSION = 3U;
 
 volatile bool update_requested = false;
 
