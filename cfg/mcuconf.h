@@ -170,7 +170,10 @@
 #define STM32_ICU_USE_TIM1                  FALSE
 #define STM32_ICU_USE_TIM2                  FALSE
 #define STM32_ICU_USE_TIM3                  FALSE
-#define STM32_ICU_USE_TIM15                 FALSE
+#define STM32_ICU_USE_TIM14                 TRUE
+#define STM32_ICU_USE_TIM15                 TRUE
+#define STM32_ICU_USE_TIM16                 TRUE
+#define STM32_ICU_USE_TIM17                 TRUE
 
 /*
  * PWM driver system settings.

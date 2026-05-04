@@ -1,6 +1,6 @@
 # Compiler options here.
 ifeq ($(USE_OPT),)
-  USE_OPT = -O0 -ggdb -fomit-frame-pointer -falign-functions=16
+  USE_OPT = -Os -ggdb -fomit-frame-pointer -falign-functions=16
 endif
 
 # C specific options here (added to USE_OPT).
@@ -25,7 +25,7 @@ endif
 
 # Enable this if you want link time optimizations (LTO).
 ifeq ($(USE_LTO),)
-  USE_LTO = no
+  USE_LTO = yes
 endif
 
 # Enable this if you want to see the full log while compiling.
@@ -105,8 +105,9 @@ include $(CHIBIOS)/os/common/ports/ARMv6-M/compilers/GCC/mk/port.mk
 # Auto-build files in ./source recursively.
 include $(CHIBIOS)/tools/mk/autobuild.mk
 # Other files (optional).
-#include $(CHIBIOS)/os/hal/lib/streams/streams.mk
+include $(CHIBIOS)/os/hal/lib/streams/streams.mk
 #include $(CHIBIOS)/os/various/shell/shell.mk
+include $(CHIBIOS)/os/various/cpp_wrappers/chcpp.mk
 
 # Define linker script file here
 LDSCRIPT= $(BOARDDIR)/STM32G071xB.ld
@@ -118,7 +119,11 @@ CSRC = $(ALLCSRC)
 # C++ sources that can be compiled in ARM or THUMB mode depending on the global
 # setting.
 CPPSRC = $(ALLCPPSRC) \
-         main.cpp
+         main.cpp \
+         analog.cpp \
+         outputs.cpp \
+         inputs.cpp \
+         spi_app_protocol.cpp
 
 # List ASM source files here.
 ASMSRC = $(ALLASMSRC)
