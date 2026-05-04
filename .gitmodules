@@ -1,3 +1,4 @@
 [submodule "ChibiOS"]
 	path = ChibiOS
-	url = https://github.com/ChibiOS/ChibiOS.git
+	url = https://github.com/dynfer/ChibiOS.git
+	branch = g0-fix
