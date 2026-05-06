@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-static constexpr uint8_t spiAppFrameSize = 32U;
+static constexpr uint8_t spiAppFrameSize = 36U;
 static constexpr uint8_t spiAppHeaderSize = 4U;
 
 static constexpr uint8_t spiCmdNop = 0x00U;
