@@ -25,7 +25,7 @@ public:
     }
 
 private:
-    static constexpr uint32_t appVersion = 5U;
+    static constexpr uint32_t appVersion = 6U;
 
     volatile bool updateRequestedFlag = false;
 
