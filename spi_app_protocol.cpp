@@ -173,12 +173,12 @@ private:
 
     void writeAllDigitalResponse(uint8_t *txbuf, uint8_t command)
     {
-        initResponse(txbuf, command, spiResultOk, 21U);
+        initResponse(txbuf, command, spiResultOk, 25U);
         txbuf[4] = digitalInputCount;
 
         for (uint8_t index = 0U; index < digitalInputCount; index++) {
             const DigitalInputState state = inputGetState(index + 1U);
-            const uint8_t offset = static_cast<uint8_t>(5U + (index * 5U));
+            const uint8_t offset = static_cast<uint8_t>(5U + (index * 6U));
             const uint32_t frequency =
                 (state.frequencyHz > 0xFFFFU) ? 0xFFFFU : state.frequencyHz;
 
@@ -208,6 +208,7 @@ private:
         frame.nibbleCount = digitalInputSentFrames[index].nibbleCount;
         frame.valid = digitalInputSentFrames[index].valid;
         ready = digitalInputSentFrameReady[index];
+        digitalInputSentFrameReady[index] = false;
         chSysUnlock();
 
         initResponse(txbuf, command, spiResultOk, 9U);
