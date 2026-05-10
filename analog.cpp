@@ -25,7 +25,9 @@ public:
 
 private:
     static constexpr uint8_t numChannels = analogInputCount;
-    static constexpr uint16_t samplesPerChannel = 1024U;
+    // 4x hardware oversampling plus 32 software-averaged scans per published update
+    // gives 128x effective averaging while keeping latency low enough for >50 Hz reads.
+    static constexpr uint16_t samplesPerChannel = 64U;
     static constexpr uint16_t halfSamplesPerChannel = samplesPerChannel / 2U;
     static constexpr uint16_t adcReferenceMillivolts = 3300U;
     static constexpr uint16_t adcMaxCount = 4095U;
