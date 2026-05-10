@@ -14,6 +14,7 @@ struct OutputMap {
     PWMDriver *driver;
     pwmchannel_t channel;
     uint8_t timerIndex;
+    iomode_t pwmMode;
 };
 
 class PwmOutputs {
@@ -25,7 +26,7 @@ public:
 
         chSysLock();
         for (uint8_t outputIndex = 0U; outputIndex < outputCount; outputIndex++) {
-            states[outputIndex] = {timerFrequenciesHz[map[outputIndex].timerIndex], 0U};
+            states[outputIndex] = {0U, 0U};
             applyOutputI(outputIndex);
         }
         chSysUnlock();
@@ -37,21 +38,20 @@ public:
             return false;
         }
 
-        frequencyHz = clampFrequency(frequencyHz);
         if (duty > outputDutyMax) {
             duty = outputDutyMax;
         }
 
         const uint8_t outputIndex = output - 1U;
-        const uint8_t timerIndex = map[outputIndex].timerIndex;
+        const uint8_t timerIndex = getMap(outputIndex).timerIndex;
+        const uint32_t requestedFrequencyHz = frequencyHz == 0U ? 0U : clampFrequency(frequencyHz);
 
         chSysLock();
-        states[outputIndex].duty = duty;
-        if (timerFrequenciesHz[timerIndex] != frequencyHz) {
-            applyTimerFrequencyI(timerIndex, frequencyHz);
+        states[outputIndex] = {requestedFrequencyHz, duty};
+        if ((requestedFrequencyHz != 0U) && (timerFrequenciesHz[timerIndex] != requestedFrequencyHz)) {
+            applyTimerFrequencyI(timerIndex, requestedFrequencyHz);
         }
         else {
-            states[outputIndex].frequencyHz = frequencyHz;
             applyOutputI(outputIndex);
         }
         chSysUnlock();
@@ -66,6 +66,7 @@ public:
         }
 
         chSysLock();
+        states[output - 1U].frequencyHz = 0U;
         states[output - 1U].duty = 0U;
         applyOutputI(output - 1U);
         chSysUnlock();
@@ -85,12 +86,33 @@ public:
     }
 
 private:
-    static constexpr OutputMap map[outputCount] = {
-        {&PWMD3, 1U, 0U},  // output1 = TIM3_CH2 PC7
-        {&PWMD3, 0U, 0U},  // output2 = TIM3_CH1 PC6
-        {&PWMD1, 1U, 1U},  // output3 = TIM1_CH2 PA9
-        {&PWMD1, 0U, 1U},  // output4 = TIM1_CH1 PA8
-    };
+    static OutputMap getMap(uint8_t outputIndex)
+    {
+        switch (outputIndex) {
+            case 0U:
+                return {&PWMD3, 1U, 0U, PAL_MODE_ALTERNATE(1) | PAL_STM32_OSPEED_HIGHEST};  // output1 = TIM3_CH2 PC7
+            case 1U:
+                return {&PWMD3, 0U, 0U, PAL_MODE_ALTERNATE(1) | PAL_STM32_OSPEED_HIGHEST};  // output2 = TIM3_CH1 PC6
+            case 2U:
+                return {&PWMD1, 1U, 1U, PAL_MODE_ALTERNATE(2) | PAL_STM32_OSPEED_HIGHEST};  // output3 = TIM1_CH2 PA9
+            default:
+                return {&PWMD1, 0U, 1U, PAL_MODE_ALTERNATE(2) | PAL_STM32_OSPEED_HIGHEST};  // output4 = TIM1_CH1 PA8
+        }
+    }
+
+    static ioline_t getLine(uint8_t outputIndex)
+    {
+        switch (outputIndex) {
+            case 0U:
+                return LINE_TIM3_CH2;
+            case 1U:
+                return LINE_TIM3_CH1;
+            case 2U:
+                return LINE_TIM1_CH2;
+            default:
+                return LINE_TIM1_CH1;
+        }
+    }
 
     OutputState states[outputCount] = {};
     uint32_t timerFrequenciesHz[2] = {defaultFrequencyHz, defaultFrequencyHz};
@@ -158,9 +180,19 @@ private:
 
     void applyOutputI(uint8_t outputIndex)
     {
-        const OutputMap &mapping = map[outputIndex];
+        const OutputMap mapping = getMap(outputIndex);
+        const OutputState &state = states[outputIndex];
+        const ioline_t line = getLine(outputIndex);
+
+        if (state.frequencyHz == 0U) {
+            palSetLineMode(line, PAL_MODE_OUTPUT_PUSHPULL);
+            palWriteLine(line, state.duty != 0U ? PAL_HIGH : PAL_LOW);
+            return;
+        }
+
+        palSetLineMode(line, mapping.pwmMode);
         pwmEnableChannelI(mapping.driver, mapping.channel,
-                          widthForDuty(mapping.driver, states[outputIndex].duty));
+                          widthForDuty(mapping.driver, state.duty));
     }
 
     void applyTimerFrequencyI(uint8_t timerIndex, uint32_t frequencyHz)
@@ -171,8 +203,10 @@ private:
         pwmChangePeriodI(driver, periodForFrequency(frequencyHz));
 
         for (uint8_t outputIndex = 0U; outputIndex < outputCount; outputIndex++) {
-            if (map[outputIndex].timerIndex == timerIndex) {
-                states[outputIndex].frequencyHz = frequencyHz;
+            if (getMap(outputIndex).timerIndex == timerIndex) {
+                if (states[outputIndex].frequencyHz != 0U) {
+                    states[outputIndex].frequencyHz = frequencyHz;
+                }
                 applyOutputI(outputIndex);
             }
         }
