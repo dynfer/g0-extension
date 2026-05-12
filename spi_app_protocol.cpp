@@ -49,14 +49,14 @@ private:
 
     void thread()
     {
-        uint8_t rxbuf[protocol::appFrameSize] = {};
-        uint8_t txbuf[protocol::appFrameSize] = {};
+        protocol::AppFrame rxbuf = {};
+        protocol::AppFrame txbuf = {};
 
         spiStart(&SPID2, &spi2Config);
         writeVersionResponse(txbuf, protocol::cmdReadVersion);
 
         while (true) {
-            if (spiExchange(&SPID2, protocol::appFrameSize, txbuf, rxbuf) == MSG_OK) {
+            if (spiExchange(&SPID2, protocol::appFrameSize, txbuf.bytes, rxbuf.bytes) == MSG_OK) {
                 buildResponse(rxbuf, txbuf);
             }
             else {
@@ -76,39 +76,11 @@ private:
         return (output >= 1U) && (output <= outputCount);
     }
 
-    static void clearFrame(uint8_t *frame)
+    static void clearFrame(protocol::AppFrame &frame)
     {
         for (uint8_t i = 0U; i < protocol::appFrameSize; i++) {
-            frame[i] = 0U;
+            frame.bytes[i] = 0U;
         }
-    }
-
-    static void putU16(uint8_t *buffer, uint8_t offset, uint16_t value)
-    {
-        buffer[offset] = static_cast<uint8_t>(value);
-        buffer[offset + 1U] = static_cast<uint8_t>(value >> 8U);
-    }
-
-    static void putU32(uint8_t *buffer, uint8_t offset, uint32_t value)
-    {
-        buffer[offset] = static_cast<uint8_t>(value);
-        buffer[offset + 1U] = static_cast<uint8_t>(value >> 8U);
-        buffer[offset + 2U] = static_cast<uint8_t>(value >> 16U);
-        buffer[offset + 3U] = static_cast<uint8_t>(value >> 24U);
-    }
-
-    static uint16_t getU16(const uint8_t *buffer, uint8_t offset)
-    {
-        return static_cast<uint16_t>(buffer[offset]) |
-               static_cast<uint16_t>(static_cast<uint16_t>(buffer[offset + 1U]) << 8U);
-    }
-
-    static uint32_t getU32(const uint8_t *buffer, uint8_t offset)
-    {
-        return static_cast<uint32_t>(buffer[offset]) |
-               (static_cast<uint32_t>(buffer[offset + 1U]) << 8U) |
-               (static_cast<uint32_t>(buffer[offset + 2U]) << 16U) |
-               (static_cast<uint32_t>(buffer[offset + 3U]) << 24U);
     }
 
     static uint8_t flagsFromState(const DigitalInputState &state)
@@ -123,37 +95,37 @@ private:
         return flags;
     }
 
-    void initResponse(uint8_t *txbuf,
+    void initResponse(protocol::AppFrame &txbuf,
                       uint8_t command,
                       uint8_t result,
                       uint8_t payloadLength)
     {
         clearFrame(txbuf);
-        txbuf[0] = updateRequestedFlag ? protocol::statusUpdateMode : protocol::statusReady;
-        txbuf[1] = result;
-        txbuf[2] = command;
-        txbuf[3] = payloadLength;
+        txbuf.responseHeader.status = updateRequestedFlag ? protocol::statusUpdateMode : protocol::statusReady;
+        txbuf.responseHeader.result = result;
+        txbuf.responseHeader.command = command;
+        txbuf.responseHeader.payloadLength = payloadLength;
     }
 
-    void writeVersionResponse(uint8_t *txbuf, uint8_t command)
+    void writeVersionResponse(protocol::AppFrame &txbuf, uint8_t command)
     {
         initResponse(txbuf, command, protocol::resultOk, protocol::versionPayloadLength);
-        putU32(txbuf, protocol::appHeaderSize, appVersion);
+        txbuf.versionResponse.version = appVersion;
     }
 
-    void writeAnalogResponse(uint8_t *txbuf, uint8_t command)
+    void writeAnalogResponse(protocol::AppFrame &txbuf, uint8_t command)
     {
         initResponse(txbuf, command, protocol::resultOk, protocol::analogPayloadLength);
-        txbuf[protocol::appHeaderSize] = analogVoltagesReady ? 1U : 0U;
-        txbuf[protocol::appHeaderSize + 1U] = analogInputCount;
+        auto &response = txbuf.analogResponse;
+        response.ready = analogVoltagesReady ? 1U : 0U;
+        response.channelCount = analogInputCount;
 
         for (uint8_t index = 0U; index < analogInputCount; index++) {
-            putU16(txbuf, static_cast<uint8_t>(protocol::appHeaderSize + 2U + (index * 2U)),
-                   analogVoltagesMillivolts[index]);
+            response.millivolts[index] = analogVoltagesMillivolts[index];
         }
     }
 
-    void writeDigitalResponse(uint8_t *txbuf, uint8_t command, uint8_t input)
+    void writeDigitalResponse(protocol::AppFrame &txbuf, uint8_t command, uint8_t input)
     {
         if (!validInput(input)) {
             initResponse(txbuf, command, protocol::resultRange, 0U);
@@ -163,36 +135,37 @@ private:
         const DigitalInputState state = inputGetState(input);
 
         initResponse(txbuf, command, protocol::resultOk, protocol::digitalPayloadLength);
-        txbuf[4] = input;
-        txbuf[5] = static_cast<uint8_t>(state.mode);
-        txbuf[6] = flagsFromState(state);
-        putU32(txbuf, 7U, state.frequencyHz);
-        putU16(txbuf, 11U, state.dutyPermille);
-        putU16(txbuf, 13U, state.periodUs);
-        putU16(txbuf, 15U, state.highTimeUs);
-        putU32(txbuf, 17U, state.captureCount);
+        auto &response = txbuf.digitalResponse;
+        response.input = input;
+        response.mode = static_cast<uint8_t>(state.mode);
+        response.flags = flagsFromState(state);
+        response.frequencyHz = state.frequencyHz;
+        response.dutyPermille = state.dutyPermille;
+        response.periodUs = state.periodUs;
+        response.highTimeUs = state.highTimeUs;
+        response.captureCount = state.captureCount;
     }
 
-    void writeAllDigitalResponse(uint8_t *txbuf, uint8_t command)
+    void writeAllDigitalResponse(protocol::AppFrame &txbuf, uint8_t command)
     {
         initResponse(txbuf, command, protocol::resultOk, protocol::digitalAllPayloadLength);
-        txbuf[4] = digitalInputCount;
+        auto &response = txbuf.digitalAllResponse;
+        response.inputCount = digitalInputCount;
 
         for (uint8_t index = 0U; index < digitalInputCount; index++) {
             const DigitalInputState state = inputGetState(index + 1U);
-            const uint8_t offset = static_cast<uint8_t>(5U + (index * 6U));
             const uint32_t frequency =
                 (state.frequencyHz > 0xFFFFU) ? 0xFFFFU : state.frequencyHz;
+            auto &input = response.inputs[index];
 
-            txbuf[offset] = static_cast<uint8_t>(state.mode);
-            txbuf[offset + 1U] = flagsFromState(state);
-            putU16(txbuf, static_cast<uint8_t>(offset + 2U),
-                   static_cast<uint16_t>(frequency));
-            putU16(txbuf, static_cast<uint8_t>(offset + 4U), state.dutyPermille);
+            input.mode = static_cast<uint8_t>(state.mode);
+            input.flags = flagsFromState(state);
+            input.frequencyHz = static_cast<uint16_t>(frequency);
+            input.dutyPermille = state.dutyPermille;
         }
     }
 
-    void writeSentResponse(uint8_t *txbuf, uint8_t command, uint8_t input)
+    void writeSentResponse(protocol::AppFrame &txbuf, uint8_t command, uint8_t input)
     {
         if (!validInput(input)) {
             initResponse(txbuf, command, protocol::resultRange, 0U);
@@ -214,15 +187,16 @@ private:
         chSysUnlock();
 
         initResponse(txbuf, command, protocol::resultOk, protocol::sentPayloadLength);
-        txbuf[4] = input;
-        putU32(txbuf, 5U, frame.data);
-        txbuf[9] = frame.status;
-        txbuf[10] = frame.crc;
-        txbuf[11] = frame.nibbleCount;
-        txbuf[12] = (ready ? 1U : 0U) | (frame.valid ? (1U << 1U) : 0U);
+        auto &response = txbuf.sentResponse;
+        response.input = input;
+        response.data = frame.data;
+        response.status = frame.status;
+        response.crc = frame.crc;
+        response.nibbleCount = frame.nibbleCount;
+        response.flags = (ready ? 1U : 0U) | (frame.valid ? (1U << 1U) : 0U);
     }
 
-    void writeOutputResponse(uint8_t *txbuf, uint8_t command, uint8_t output)
+    void writeOutputResponse(protocol::AppFrame &txbuf, uint8_t command, uint8_t output)
     {
         if (!validOutput(output)) {
             initResponse(txbuf, command, protocol::resultRange, 0U);
@@ -232,14 +206,15 @@ private:
         const OutputState state = outputGetState(output);
 
         initResponse(txbuf, command, protocol::resultOk, protocol::outputPayloadLength);
-        txbuf[4] = output;
-        putU32(txbuf, 5U, state.frequencyHz);
-        putU16(txbuf, 9U, state.duty);
+        auto &response = txbuf.outputResponse;
+        response.output = output;
+        response.frequencyHz = state.frequencyHz;
+        response.duty = state.duty;
     }
 
-    void buildResponse(const uint8_t *rxbuf, uint8_t *txbuf)
+    void buildResponse(const protocol::AppFrame &rxbuf, protocol::AppFrame &txbuf)
     {
-        const uint8_t command = rxbuf[0];
+        const uint8_t command = rxbuf.commandRequest.command;
 
         switch (command) {
         case protocol::cmdNop:
@@ -252,13 +227,13 @@ private:
             writeAnalogResponse(txbuf, command);
             break;
         case protocol::cmdReadDigital:
-            writeDigitalResponse(txbuf, command, rxbuf[1]);
+            writeDigitalResponse(txbuf, command, rxbuf.indexedRequest.index);
             break;
         case protocol::cmdReadDigitalAll:
             writeAllDigitalResponse(txbuf, command);
             break;
         case protocol::cmdReadSent:
-            writeSentResponse(txbuf, command, rxbuf[1]);
+            writeSentResponse(txbuf, command, rxbuf.indexedRequest.index);
             break;
         case protocol::cmdSetOutput:
             setOutput(txbuf, rxbuf);
@@ -267,7 +242,7 @@ private:
             disableOutput(txbuf, rxbuf);
             break;
         case protocol::cmdReadOutput:
-            writeOutputResponse(txbuf, command, rxbuf[1]);
+            writeOutputResponse(txbuf, command, rxbuf.indexedRequest.index);
             break;
         case protocol::cmdSetInputMode:
             setInputMode(txbuf, rxbuf);
@@ -282,34 +257,40 @@ private:
         }
     }
 
-    void setOutput(uint8_t *txbuf, const uint8_t *rxbuf)
+    void setOutput(protocol::AppFrame &txbuf, const protocol::AppFrame &rxbuf)
     {
-        if (outputSet(rxbuf[1], getU32(rxbuf, 2U), getU16(rxbuf, 6U))) {
-            writeOutputResponse(txbuf, rxbuf[0], rxbuf[1]);
+        const auto &request = rxbuf.setOutputRequest;
+
+        if (outputSet(request.output, request.frequencyHz, request.duty)) {
+            writeOutputResponse(txbuf, request.command, request.output);
         }
         else {
-            initResponse(txbuf, rxbuf[0], protocol::resultRange, 0U);
+            initResponse(txbuf, request.command, protocol::resultRange, 0U);
         }
     }
 
-    void disableOutput(uint8_t *txbuf, const uint8_t *rxbuf)
+    void disableOutput(protocol::AppFrame &txbuf, const protocol::AppFrame &rxbuf)
     {
-        if (validOutput(rxbuf[1])) {
-            outputDisable(rxbuf[1]);
-            writeOutputResponse(txbuf, rxbuf[0], rxbuf[1]);
+        const auto &request = rxbuf.indexedRequest;
+
+        if (validOutput(request.index)) {
+            outputDisable(request.index);
+            writeOutputResponse(txbuf, request.command, request.index);
         }
         else {
-            initResponse(txbuf, rxbuf[0], protocol::resultRange, 0U);
+            initResponse(txbuf, request.command, protocol::resultRange, 0U);
         }
     }
 
-    void setInputMode(uint8_t *txbuf, const uint8_t *rxbuf)
+    void setInputMode(protocol::AppFrame &txbuf, const protocol::AppFrame &rxbuf)
     {
-        if (inputSetMode(rxbuf[1], static_cast<DigitalInputMode>(rxbuf[2]))) {
-            writeDigitalResponse(txbuf, rxbuf[0], rxbuf[1]);
+        const auto &request = rxbuf.setInputModeRequest;
+
+        if (inputSetMode(request.input, static_cast<DigitalInputMode>(request.mode))) {
+            writeDigitalResponse(txbuf, request.command, request.input);
         }
         else {
-            initResponse(txbuf, rxbuf[0], protocol::resultRange, 0U);
+            initResponse(txbuf, request.command, protocol::resultRange, 0U);
         }
     }
 };

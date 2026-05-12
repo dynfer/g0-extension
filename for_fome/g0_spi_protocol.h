@@ -41,4 +41,119 @@ static constexpr uint8_t resultBusy = 0x03U;
 
 static constexpr uint8_t digitalMode = 0x00U;
 
+#if defined(__GNUC__)
+#define G0_SPI_PROTOCOL_PACKED __attribute__((packed))
+#else
+#define G0_SPI_PROTOCOL_PACKED
+#endif
+
+struct G0_SPI_PROTOCOL_PACKED ResponseHeader {
+    uint8_t status;
+    uint8_t result;
+    uint8_t command;
+    uint8_t payloadLength;
+};
+
+struct G0_SPI_PROTOCOL_PACKED CommandRequest {
+    uint8_t command;
+};
+
+struct G0_SPI_PROTOCOL_PACKED IndexedRequest {
+    uint8_t command;
+    uint8_t index;
+};
+
+struct G0_SPI_PROTOCOL_PACKED SetInputModeRequest {
+    uint8_t command;
+    uint8_t input;
+    uint8_t mode;
+};
+
+struct G0_SPI_PROTOCOL_PACKED SetOutputRequest {
+    uint8_t command;
+    uint8_t output;
+    uint32_t frequencyHz;
+    uint16_t duty;
+};
+
+struct G0_SPI_PROTOCOL_PACKED VersionResponse {
+    ResponseHeader header;
+    uint32_t version;
+};
+
+struct G0_SPI_PROTOCOL_PACKED AnalogResponse {
+    ResponseHeader header;
+    uint8_t ready;
+    uint8_t channelCount;
+    uint16_t millivolts[analogChannelCount];
+};
+
+struct G0_SPI_PROTOCOL_PACKED DigitalResponse {
+    ResponseHeader header;
+    uint8_t input;
+    uint8_t mode;
+    uint8_t flags;
+    uint32_t frequencyHz;
+    uint16_t dutyPermille;
+    uint16_t periodUs;
+    uint16_t highTimeUs;
+    uint32_t captureCount;
+};
+
+struct G0_SPI_PROTOCOL_PACKED DigitalAllState {
+    uint8_t mode;
+    uint8_t flags;
+    uint16_t frequencyHz;
+    uint16_t dutyPermille;
+};
+
+struct G0_SPI_PROTOCOL_PACKED DigitalAllResponse {
+    ResponseHeader header;
+    uint8_t inputCount;
+    DigitalAllState inputs[digitalInputCount];
+};
+
+struct G0_SPI_PROTOCOL_PACKED SentResponse {
+    ResponseHeader header;
+    uint8_t input;
+    uint32_t data;
+    uint8_t status;
+    uint8_t crc;
+    uint8_t nibbleCount;
+    uint8_t flags;
+};
+
+struct G0_SPI_PROTOCOL_PACKED OutputResponse {
+    ResponseHeader header;
+    uint8_t output;
+    uint32_t frequencyHz;
+    uint16_t duty;
+};
+
+union AppFrame {
+    uint8_t bytes[appFrameSize];
+    CommandRequest commandRequest;
+    IndexedRequest indexedRequest;
+    SetInputModeRequest setInputModeRequest;
+    SetOutputRequest setOutputRequest;
+    ResponseHeader responseHeader;
+    VersionResponse versionResponse;
+    AnalogResponse analogResponse;
+    DigitalResponse digitalResponse;
+    DigitalAllResponse digitalAllResponse;
+    SentResponse sentResponse;
+    OutputResponse outputResponse;
+};
+
+static_assert(sizeof(ResponseHeader) == appHeaderSize, "Unexpected G0 SPI response header size");
+static_assert(sizeof(VersionResponse) - appHeaderSize == versionPayloadLength, "Unexpected G0 version payload size");
+static_assert(sizeof(AnalogResponse) - appHeaderSize == analogPayloadLength, "Unexpected G0 analog payload size");
+static_assert(sizeof(DigitalResponse) - appHeaderSize == digitalPayloadLength, "Unexpected G0 digital payload size");
+static_assert(sizeof(DigitalAllResponse) - appHeaderSize == digitalAllPayloadLength, "Unexpected G0 digital-all payload size");
+static_assert(sizeof(SentResponse) - appHeaderSize == sentPayloadLength, "Unexpected G0 SENT payload size");
+static_assert(sizeof(OutputResponse) - appHeaderSize == outputPayloadLength, "Unexpected G0 output payload size");
+static_assert(sizeof(AppFrame) == appFrameSize, "Unexpected G0 SPI app frame size");
+
+#undef G0_SPI_PROTOCOL_PACKED
+
 } // namespace g0_spi_protocol
