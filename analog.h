@@ -2,7 +2,9 @@
 
 #include <stdint.h>
 
-static constexpr uint8_t analogInputCount = 12U;
+#include "for_fome/g0_spi_protocol.h"
+
+static constexpr uint8_t analogInputCount = g0_spi_protocol::analogChannelCount;
 
 void startSampling(void);
 

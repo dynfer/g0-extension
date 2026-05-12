@@ -2,12 +2,14 @@
 
 #include <stdint.h>
 
-static constexpr uint8_t digitalInputCount = 4U;
+#include "for_fome/g0_spi_protocol.h"
+
+static constexpr uint8_t digitalInputCount = g0_spi_protocol::digitalInputCount;
 static constexpr uint8_t digitalInputCaptureBufferSize = 32U;
 static constexpr uint8_t sentFrameBufferSize = 4U;
 
 enum class DigitalInputMode : uint8_t {
-    Digital = 0U,
+    Digital = g0_spi_protocol::digitalMode,
     Frequency = 1U,
     Sent = 2U,
 };

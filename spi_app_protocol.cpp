@@ -9,6 +9,8 @@
 
 namespace {
 
+namespace protocol = g0_spi_protocol;
+
 THD_WORKING_AREA(spiAppThreadWa, 384);
 
 class SpiAppProtocol {
@@ -47,19 +49,19 @@ private:
 
     void thread()
     {
-        uint8_t rxbuf[spiAppFrameSize] = {};
-        uint8_t txbuf[spiAppFrameSize] = {};
+        uint8_t rxbuf[protocol::appFrameSize] = {};
+        uint8_t txbuf[protocol::appFrameSize] = {};
 
         spiStart(&SPID2, &spi2Config);
-        writeVersionResponse(txbuf, spiCmdReadVersion);
+        writeVersionResponse(txbuf, protocol::cmdReadVersion);
 
         while (true) {
-            if (spiExchange(&SPID2, spiAppFrameSize, txbuf, rxbuf) == MSG_OK) {
+            if (spiExchange(&SPID2, protocol::appFrameSize, txbuf, rxbuf) == MSG_OK) {
                 buildResponse(rxbuf, txbuf);
             }
             else {
                 spiStopTransfer(&SPID2, nullptr);
-                initResponse(txbuf, spiCmdNop, spiResultBusy, 0U);
+                initResponse(txbuf, protocol::cmdNop, protocol::resultBusy, 0U);
             }
         }
     }
@@ -76,7 +78,7 @@ private:
 
     static void clearFrame(uint8_t *frame)
     {
-        for (uint8_t i = 0U; i < spiAppFrameSize; i++) {
+        for (uint8_t i = 0U; i < protocol::appFrameSize; i++) {
             frame[i] = 0U;
         }
     }
@@ -127,7 +129,7 @@ private:
                       uint8_t payloadLength)
     {
         clearFrame(txbuf);
-        txbuf[0] = updateRequestedFlag ? spiStatusUpdateMode : spiStatusReady;
+        txbuf[0] = updateRequestedFlag ? protocol::statusUpdateMode : protocol::statusReady;
         txbuf[1] = result;
         txbuf[2] = command;
         txbuf[3] = payloadLength;
@@ -135,18 +137,18 @@ private:
 
     void writeVersionResponse(uint8_t *txbuf, uint8_t command)
     {
-        initResponse(txbuf, command, spiResultOk, 4U);
-        putU32(txbuf, spiAppHeaderSize, appVersion);
+        initResponse(txbuf, command, protocol::resultOk, protocol::versionPayloadLength);
+        putU32(txbuf, protocol::appHeaderSize, appVersion);
     }
 
     void writeAnalogResponse(uint8_t *txbuf, uint8_t command)
     {
-        initResponse(txbuf, command, spiResultOk, 26U);
-        txbuf[spiAppHeaderSize] = analogVoltagesReady ? 1U : 0U;
-        txbuf[spiAppHeaderSize + 1U] = analogInputCount;
+        initResponse(txbuf, command, protocol::resultOk, protocol::analogPayloadLength);
+        txbuf[protocol::appHeaderSize] = analogVoltagesReady ? 1U : 0U;
+        txbuf[protocol::appHeaderSize + 1U] = analogInputCount;
 
         for (uint8_t index = 0U; index < analogInputCount; index++) {
-            putU16(txbuf, static_cast<uint8_t>(spiAppHeaderSize + 2U + (index * 2U)),
+            putU16(txbuf, static_cast<uint8_t>(protocol::appHeaderSize + 2U + (index * 2U)),
                    analogVoltagesMillivolts[index]);
         }
     }
@@ -154,13 +156,13 @@ private:
     void writeDigitalResponse(uint8_t *txbuf, uint8_t command, uint8_t input)
     {
         if (!validInput(input)) {
-            initResponse(txbuf, command, spiResultRange, 0U);
+            initResponse(txbuf, command, protocol::resultRange, 0U);
             return;
         }
 
         const DigitalInputState state = inputGetState(input);
 
-        initResponse(txbuf, command, spiResultOk, 17U);
+        initResponse(txbuf, command, protocol::resultOk, protocol::digitalPayloadLength);
         txbuf[4] = input;
         txbuf[5] = static_cast<uint8_t>(state.mode);
         txbuf[6] = flagsFromState(state);
@@ -173,7 +175,7 @@ private:
 
     void writeAllDigitalResponse(uint8_t *txbuf, uint8_t command)
     {
-        initResponse(txbuf, command, spiResultOk, 25U);
+        initResponse(txbuf, command, protocol::resultOk, protocol::digitalAllPayloadLength);
         txbuf[4] = digitalInputCount;
 
         for (uint8_t index = 0U; index < digitalInputCount; index++) {
@@ -193,7 +195,7 @@ private:
     void writeSentResponse(uint8_t *txbuf, uint8_t command, uint8_t input)
     {
         if (!validInput(input)) {
-            initResponse(txbuf, command, spiResultRange, 0U);
+            initResponse(txbuf, command, protocol::resultRange, 0U);
             return;
         }
 
@@ -211,7 +213,7 @@ private:
         digitalInputSentFrameReady[index] = false;
         chSysUnlock();
 
-        initResponse(txbuf, command, spiResultOk, 9U);
+        initResponse(txbuf, command, protocol::resultOk, protocol::sentPayloadLength);
         txbuf[4] = input;
         putU32(txbuf, 5U, frame.data);
         txbuf[9] = frame.status;
@@ -223,13 +225,13 @@ private:
     void writeOutputResponse(uint8_t *txbuf, uint8_t command, uint8_t output)
     {
         if (!validOutput(output)) {
-            initResponse(txbuf, command, spiResultRange, 0U);
+            initResponse(txbuf, command, protocol::resultRange, 0U);
             return;
         }
 
         const OutputState state = outputGetState(output);
 
-        initResponse(txbuf, command, spiResultOk, 7U);
+        initResponse(txbuf, command, protocol::resultOk, protocol::outputPayloadLength);
         txbuf[4] = output;
         putU32(txbuf, 5U, state.frequencyHz);
         putU16(txbuf, 9U, state.duty);
@@ -240,42 +242,42 @@ private:
         const uint8_t command = rxbuf[0];
 
         switch (command) {
-        case spiCmdNop:
-            initResponse(txbuf, command, spiResultOk, 0U);
+        case protocol::cmdNop:
+            initResponse(txbuf, command, protocol::resultOk, 0U);
             break;
-        case spiCmdReadVersion:
+        case protocol::cmdReadVersion:
             writeVersionResponse(txbuf, command);
             break;
-        case spiCmdReadAnalog:
+        case protocol::cmdReadAnalog:
             writeAnalogResponse(txbuf, command);
             break;
-        case spiCmdReadDigital:
+        case protocol::cmdReadDigital:
             writeDigitalResponse(txbuf, command, rxbuf[1]);
             break;
-        case spiCmdReadDigitalAll:
+        case protocol::cmdReadDigitalAll:
             writeAllDigitalResponse(txbuf, command);
             break;
-        case spiCmdReadSent:
+        case protocol::cmdReadSent:
             writeSentResponse(txbuf, command, rxbuf[1]);
             break;
-        case spiCmdSetOutput:
+        case protocol::cmdSetOutput:
             setOutput(txbuf, rxbuf);
             break;
-        case spiCmdDisableOutput:
+        case protocol::cmdDisableOutput:
             disableOutput(txbuf, rxbuf);
             break;
-        case spiCmdReadOutput:
+        case protocol::cmdReadOutput:
             writeOutputResponse(txbuf, command, rxbuf[1]);
             break;
-        case spiCmdSetInputMode:
+        case protocol::cmdSetInputMode:
             setInputMode(txbuf, rxbuf);
             break;
-        case spiCmdEnterUpdate:
+        case protocol::cmdEnterUpdate:
             updateRequestedFlag = true;
-            initResponse(txbuf, command, spiResultOk, 0U);
+            initResponse(txbuf, command, protocol::resultOk, 0U);
             break;
         default:
-            initResponse(txbuf, command, spiResultInvalid, 0U);
+            initResponse(txbuf, command, protocol::resultInvalid, 0U);
             break;
         }
     }
@@ -286,7 +288,7 @@ private:
             writeOutputResponse(txbuf, rxbuf[0], rxbuf[1]);
         }
         else {
-            initResponse(txbuf, rxbuf[0], spiResultRange, 0U);
+            initResponse(txbuf, rxbuf[0], protocol::resultRange, 0U);
         }
     }
 
@@ -297,7 +299,7 @@ private:
             writeOutputResponse(txbuf, rxbuf[0], rxbuf[1]);
         }
         else {
-            initResponse(txbuf, rxbuf[0], spiResultRange, 0U);
+            initResponse(txbuf, rxbuf[0], protocol::resultRange, 0U);
         }
     }
 
@@ -307,7 +309,7 @@ private:
             writeDigitalResponse(txbuf, rxbuf[0], rxbuf[1]);
         }
         else {
-            initResponse(txbuf, rxbuf[0], spiResultRange, 0U);
+            initResponse(txbuf, rxbuf[0], protocol::resultRange, 0U);
         }
     }
 };

@@ -2,8 +2,10 @@
 
 #include <stdint.h>
 
-static constexpr uint8_t outputCount = 4U;
-static constexpr uint16_t outputDutyMax = 10000U;
+#include "for_fome/g0_spi_protocol.h"
+
+static constexpr uint8_t outputCount = g0_spi_protocol::outputCount;
+static constexpr uint16_t outputDutyMax = g0_spi_protocol::outputDutyMax;
 
 struct OutputState {
     uint32_t frequencyHz;
