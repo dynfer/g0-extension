@@ -9,6 +9,11 @@ namespace {
 constexpr uint32_t minFrequencyHz = 1U;
 constexpr uint32_t maxFrequencyHz = 500U;
 
+constexpr bool isValidFrequency(uint32_t frequencyHz)
+{
+    return frequencyHz == 0U || ((frequencyHz >= minFrequencyHz) && (frequencyHz <= maxFrequencyHz));
+}
+
 class SoftwareOutputs;
 
 struct OutputRuntimeState {
@@ -200,8 +205,11 @@ void outputInit(void)
 
 bool outputSet(uint8_t output, uint32_t frequencyHz, uint16_t duty)
 {
-    auto freq = std::clamp(frequencyHz, minFrequencyHz, maxFrequencyHz);
-    return outputs.set(output, freq, duty);
+    if (!isValidFrequency(frequencyHz)) {
+        return false;
+    }
+
+    return outputs.set(output, frequencyHz, duty);
 }
 
 void outputDisable(uint8_t output)
