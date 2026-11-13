@@ -1,0 +1,273 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sat, 14 Nov 2026 00:02:24 +0100
+Subject: [PATCH 3/6] g0: add external ADC provider with freshness and filter
+ recovery
+
+---
+ firmware/CHANGELOG.md                         |  1 +
+ .../boards/atlas/board_configuration.cpp      |  2 +
+ .../boards/atlas/connectors/g0_analog.yaml    | 48 +++++++++++++++++++
+ firmware/hw_layer/adc/adc_subscription.cpp    |  7 +++
+ firmware/hw_layer/g0_extension/analog.h       | 45 +++++++++++++++++
+ .../hw_layer/g0_extension/analog_provider.cpp | 29 +++++++++++
+ firmware/hw_layer/g0_extension/g0.mk          |  3 +-
+ firmware/hw_layer/g0_extension/tests/test.cpp | 28 +++++++++++
+ 8 files changed, 162 insertions(+), 1 deletion(-)
+ create mode 100644 firmware/config/boards/atlas/connectors/g0_analog.yaml
+ create mode 100644 firmware/hw_layer/g0_extension/analog.h
+ create mode 100644 firmware/hw_layer/g0_extension/analog_provider.cpp
+
+diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
+index 64aaa7fd87..4a4df217a8 100644
+--- a/firmware/CHANGELOG.md
++++ b/firmware/CHANGELOG.md
+@@ -35,6 +35,7 @@ or
+  - MAF trim is split out as its own table, rather than sharing the VE table. Most setups should have this table set to all 100, but if yours isn't, just copy values over from the VE table.
+ 
+ ### Added
++ - Optional G0 expansion ADC support on Atlas (build with G0_EXTENSION=yes).
+  - SD card logs are now organized into `YYYY/MM/DD` folders when the real-time clock is set. If the clock is not set, logs are still written to the root of the card with a sequential name.
+  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
+  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
+diff --git a/firmware/config/boards/atlas/board_configuration.cpp b/firmware/config/boards/atlas/board_configuration.cpp
+index 60e6983c08..062fd0998b 100644
+--- a/firmware/config/boards/atlas/board_configuration.cpp
++++ b/firmware/config/boards/atlas/board_configuration.cpp
+@@ -4,6 +4,7 @@
+ 
+ #if EFI_G0_EXTENSION && !EFI_BOOTLOADER
+ #include "g0_extension/service.h"
++#include "g0_extension/analog.h"
+ #include "mpu_util.h"
+ 
+ void initG0Extension() {
+@@ -22,6 +23,7 @@ void initG0Extension() {
+ 			.cfg2 = 0};
+ 	initSpiCs(&g0SpiConfig, Gpio::F6);
+ 	palSetPad(g0SpiConfig.ssport, g0SpiConfig.sspad);
++	g0::registerAnalog(EFI_ADC_20 - EFI_ADC_0);
+ 	g0::start(*getSpiDevice(SPI_DEVICE_5), g0SpiConfig);
+ }
+ #endif
+diff --git a/firmware/config/boards/atlas/connectors/g0_analog.yaml b/firmware/config/boards/atlas/connectors/g0_analog.yaml
+new file mode 100644
+index 0000000000..cae0065bd5
+--- /dev/null
++++ b/firmware/config/boards/atlas/connectors/g0_analog.yaml
+@@ -0,0 +1,48 @@
++pins:
++  - id: EFI_ADC_20
++    class: analog_inputs
++    ts_name: G0 Analog 1
++
++  - id: EFI_ADC_21
++    class: analog_inputs
++    ts_name: G0 Analog 2
++
++  - id: EFI_ADC_22
++    class: analog_inputs
++    ts_name: G0 Analog 3
++
++  - id: EFI_ADC_23
++    class: analog_inputs
++    ts_name: G0 Analog 4
++
++  - id: EFI_ADC_24
++    class: analog_inputs
++    ts_name: G0 Analog 5
++
++  - id: EFI_ADC_25
++    class: analog_inputs
++    ts_name: G0 Analog 6
++
++  - id: EFI_ADC_26
++    class: analog_inputs
++    ts_name: G0 Analog 7
++
++  - id: EFI_ADC_27
++    class: analog_inputs
++    ts_name: G0 Analog 8
++
++  - id: EFI_ADC_28
++    class: analog_inputs
++    ts_name: G0 Analog 9
++
++  - id: EFI_ADC_29
++    class: analog_inputs
++    ts_name: G0 Analog 10
++
++  - id: EFI_ADC_30
++    class: analog_inputs
++    ts_name: G0 Analog 11
++
++  - id: EFI_ADC_31
++    class: analog_inputs
++    ts_name: G0 Analog 12
+diff --git a/firmware/hw_layer/adc/adc_subscription.cpp b/firmware/hw_layer/adc/adc_subscription.cpp
+index b702f302a7..25feb108ae 100644
+--- a/firmware/hw_layer/adc/adc_subscription.cpp
++++ b/firmware/hw_layer/adc/adc_subscription.cpp
+@@ -128,6 +128,13 @@ void AdcSubscription::UpdateSubscribers(efitick_t nowNt) {
+ 		}
+ 
+ 		float mcuVolts = AdcProvider::getVoltage(entry.Channel);
++		// External providers can be unavailable at startup or after link loss.
++		// Keep invalid values out of the IIR filter so it can recover.
++		if (!std::isfinite(mcuVolts)) {
++			entry.HasUpdated = false;
++			entry.Sensor->invalidate(UnexpectedCode::Timeout);
++			continue;
++		}
+ 		float sensorVolts = mcuVolts * entry.VoltsPerAdcVolt;
+ 
+ 		// On the very first update, preload the filter as if we've been
+diff --git a/firmware/hw_layer/g0_extension/analog.h b/firmware/hw_layer/g0_extension/analog.h
+new file mode 100644
+index 0000000000..e9463fcc29
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/analog.h
+@@ -0,0 +1,45 @@
++#pragma once
++#include "link.h"
++#include <cmath>
++
++namespace g0 {
++class Analog : public Module {
++public:
++	bool request(wire::AppFrame& tx, uint32_t) override {
++		tx.bytes[0] = wire::cmdReadAnalog;
++		return true;
++	}
++	void response(const wire::AppFrame&, const wire::AppFrame& rx, uint32_t nowMs) override {
++		const auto& value = rx.analogResponse;
++		m_ready = false;
++		if (value.ready != 1 || value.channelCount != wire::analogChannelCount) {
++			return;
++		}
++		for (size_t i = 0; i < wire::analogChannelCount; i++) {
++			if (value.millivolts[i] > 3300) {
++				return;
++			}
++		}
++		for (size_t i = 0; i < wire::analogChannelCount; i++) {
++			m_millivolts[i] = value.millivolts[i];
++		}
++		m_updated = nowMs;
++		m_ready = true;
++	}
++	void disconnected() override {
++		m_ready = false;
++	}
++	float voltage(size_t index, uint32_t nowMs) const {
++		if (index >= wire::analogChannelCount || !m_ready || uint32_t(nowMs - m_updated) >= SampleTimeoutMs) {
++			return NAN;
++		}
++		return m_millivolts[index] * 0.001f;
++	}
++
++private:
++	bool m_ready = false;
++	uint32_t m_updated = 0;
++	uint16_t m_millivolts[wire::analogChannelCount] = {};
++};
++void registerAnalog(size_t firstChannelIndex);
++} // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/analog_provider.cpp b/firmware/hw_layer/g0_extension/analog_provider.cpp
+new file mode 100644
+index 0000000000..a7d04ae122
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/analog_provider.cpp
+@@ -0,0 +1,29 @@
++#include "pch.h"
++#include "analog.h"
++#include "service.h"
++#include "adc_provider.h"
++
++namespace g0 {
++namespace {
++LockedModule<Analog> analog;
++class Provider final : public AdcProvider {
++	const char* name() const override {
++		return "G0";
++	}
++	bool enable(const char*, size_t index) override {
++		return index < wire::analogChannelCount;
++	}
++	void disable(size_t) override {}
++	float get(size_t index) const override {
++		chibios_rt::CriticalSectionLocker lock;
++		return analog.state.voltage(index, nowMs());
++	}
++};
++Provider provider;
++} // namespace
++
++void registerAnalog(size_t firstChannelIndex) {
++	registerAdcProvider(provider, firstChannelIndex, wire::analogChannelCount);
++	link().attach(analog);
++}
++} // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/g0.mk b/firmware/hw_layer/g0_extension/g0.mk
+index 55370e75e5..208233030b 100644
+--- a/firmware/hw_layer/g0_extension/g0.mk
++++ b/firmware/hw_layer/g0_extension/g0.mk
+@@ -2,5 +2,6 @@ ifeq ($(G0_EXTENSION),yes)
+ DDEFS += -DEFI_G0_EXTENSION=TRUE
+ HW_LAYER_EMS_CPP += \
+ 	$(PROJECT_DIR)/hw_layer/g0_extension/link.cpp \
+-	$(PROJECT_DIR)/hw_layer/g0_extension/service.cpp
++	$(PROJECT_DIR)/hw_layer/g0_extension/service.cpp \
++	$(PROJECT_DIR)/hw_layer/g0_extension/analog_provider.cpp
+ endif
+diff --git a/firmware/hw_layer/g0_extension/tests/test.cpp b/firmware/hw_layer/g0_extension/tests/test.cpp
+index a4e6bcc0f2..db0e5818a7 100644
+--- a/firmware/hw_layer/g0_extension/tests/test.cpp
++++ b/firmware/hw_layer/g0_extension/tests/test.cpp
+@@ -1,4 +1,5 @@
+ #include "../link.h"
++#include "../analog.h"
+ #include <cassert>
+ #include <cstdio>
+ 
+@@ -94,6 +95,32 @@ static void testValidation() {
+ 	assert(!validResponse(tx, rx));
+ }
+ 
++static void testAnalog() {
++	Analog analog;
++	assert(std::isnan(analog.voltage(0, 0)));
++	auto rx = reply(wire::cmdReadAnalog, wire::analogPayloadLength);
++	rx.analogResponse.ready = 1;
++	rx.analogResponse.channelCount = wire::analogChannelCount;
++	for (unsigned i = 0; i < wire::analogChannelCount; i++) {
++		rx.analogResponse.millivolts[i] = 1234;
++	}
++	analog.response({}, rx, UINT32_MAX - 100);
++	assert(std::fabs(analog.voltage(11, 0) - 1.234f) < 0.0001f);
++	assert(std::isnan(analog.voltage(12, 0)));
++	assert(std::isnan(analog.voltage(0, 150)));
++	rx.analogResponse.channelCount--;
++	analog.response({}, rx, 200);
++	assert(std::isnan(analog.voltage(0, 200)));
++	rx.analogResponse.channelCount++;
++	rx.analogResponse.millivolts[11] = 3301;
++	analog.response({}, rx, 210);
++	assert(std::isnan(analog.voltage(0, 210)));
++	rx.analogResponse.millivolts[11] = 0;
++	analog.response({}, rx, 220);
++	analog.disconnected();
++	assert(std::isnan(analog.voltage(0, 220)));
++}
++
+ static void testFairnessAndStall() {
+ 	Link link;
+ 	TestModule modules[3];
+@@ -133,6 +160,7 @@ static void testFairnessAndStall() {
+ 
+ int main() {
+ 	testFairnessAndStall();
++	testAnalog();
+ 	testLink();
+ 	testValidation();
+ 	std::puts("G0 protocol tests passed");

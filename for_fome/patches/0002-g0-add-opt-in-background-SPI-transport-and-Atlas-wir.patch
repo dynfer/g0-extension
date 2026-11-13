@@ -1,0 +1,224 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sat, 14 Nov 2026 00:02:24 +0100
+Subject: [PATCH 2/6] g0: add opt-in background SPI transport and Atlas wiring
+
+---
+ firmware/config/boards/atlas/board.mk         |  3 +
+ .../boards/atlas/board_configuration.cpp      | 31 ++++++++++
+ firmware/hw_layer/g0_extension/g0.mk          |  6 ++
+ firmware/hw_layer/g0_extension/service.cpp    | 56 +++++++++++++++++++
+ firmware/hw_layer/g0_extension/service.h      | 31 ++++++++++
+ firmware/hw_layer/hardware.cpp                |  7 +++
+ firmware/hw_layer/hw_layer.mk                 |  2 +
+ 7 files changed, 136 insertions(+)
+ create mode 100644 firmware/hw_layer/g0_extension/g0.mk
+ create mode 100644 firmware/hw_layer/g0_extension/service.cpp
+ create mode 100644 firmware/hw_layer/g0_extension/service.h
+
+diff --git a/firmware/config/boards/atlas/board.mk b/firmware/config/boards/atlas/board.mk
+index 382f7ca585..5f962d66d1 100644
+--- a/firmware/config/boards/atlas/board.mk
++++ b/firmware/config/boards/atlas/board.mk
+@@ -28,3 +28,6 @@ USE_WIFI = yes
+ SD_BOOTLOADER = yes
+ 
+ SHORT_BOARD_NAME = atlas
++
++# Build only when the expansion board is fitted.
++G0_EXTENSION ?= no
+diff --git a/firmware/config/boards/atlas/board_configuration.cpp b/firmware/config/boards/atlas/board_configuration.cpp
+index bfe0719666..60e6983c08 100644
+--- a/firmware/config/boards/atlas/board_configuration.cpp
++++ b/firmware/config/boards/atlas/board_configuration.cpp
+@@ -2,6 +2,30 @@
+ 
+ #include "adc_subscription.h"
+ 
++#if EFI_G0_EXTENSION && !EFI_BOOTLOADER
++#include "g0_extension/service.h"
++#include "mpu_util.h"
++
++void initG0Extension() {
++	static bool initialized = false;
++	if (initialized) {
++		return;
++	}
++	initialized = true;
++	turnOnSpi(SPI_DEVICE_5);
++	static SPIConfig g0SpiConfig = {
++			.circular = false,
++			.end_cb = nullptr,
++			.ssport = nullptr,
++			.sspad = 0,
++			.cfg1 = 7 | SPI_CFG1_MBR_2 | SPI_CFG1_MBR_1 | SPI_CFG1_MBR_0,
++			.cfg2 = 0};
++	initSpiCs(&g0SpiConfig, Gpio::F6);
++	palSetPad(g0SpiConfig.ssport, g0SpiConfig.sspad);
++	g0::start(*getSpiDevice(SPI_DEVICE_5), g0SpiConfig);
++}
++#endif
++
+ #ifndef EFI_BOOTLOADER
+ #include "functional_sensor.h"
+ #include "linear_func.h"
+@@ -137,6 +161,13 @@ void setBoardConfigOverrides() {
+ 	engineConfiguration->spi4misoPin = Gpio::E5;
+ 	engineConfiguration->spi4mosiPin = Gpio::E6;
+ 
++#if EFI_G0_EXTENSION
++	engineConfiguration->is_enabled_spi_5 = true;
++	engineConfiguration->spi5sckPin = Gpio::F7;
++	engineConfiguration->spi5misoPin = Gpio::F8;
++	engineConfiguration->spi5mosiPin = Gpio::F9;
++#endif
++
+ 	// Clear SPI SD card pins in case it's enabled from porting a Proteus tune
+ 	if (engineConfiguration->sdCardSpiDevice || isBrainPinValid(engineConfiguration->sdCardCsPin)) {
+ 		engineConfiguration->is_enabled_spi_3 = false;
+diff --git a/firmware/hw_layer/g0_extension/g0.mk b/firmware/hw_layer/g0_extension/g0.mk
+new file mode 100644
+index 0000000000..55370e75e5
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/g0.mk
+@@ -0,0 +1,6 @@
++ifeq ($(G0_EXTENSION),yes)
++DDEFS += -DEFI_G0_EXTENSION=TRUE
++HW_LAYER_EMS_CPP += \
++	$(PROJECT_DIR)/hw_layer/g0_extension/link.cpp \
++	$(PROJECT_DIR)/hw_layer/g0_extension/service.cpp
++endif
+diff --git a/firmware/hw_layer/g0_extension/service.cpp b/firmware/hw_layer/g0_extension/service.cpp
+new file mode 100644
+index 0000000000..6e558df355
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/service.cpp
+@@ -0,0 +1,56 @@
++#include "pch.h"
++#include "service.h"
++#include "spi_thread.h"
++#include "mpu_util.h"
++
++namespace g0 {
++namespace {
++// SPI DMA must not access stack or cached SRAM on H7.
++NO_CACHE wire::AppFrame txBuffer;
++NO_CACHE wire::AppFrame rxBuffer;
++Link instance;
++
++class Device final : public BackgroundSpiDevice {
++public:
++	SPIDriver* driver = nullptr;
++	SPIConfig spiConfig = {};
++	SPIDriver* spiDriver() const override {
++		return driver;
++	}
++	const SPIConfig& config() override {
++		return spiConfig;
++	}
++	int getSpiThreadPeriodMs() const override {
++		return 10;
++	}
++	void performTransfer(SPIDriver& spi) override {
++		instance.prepare(txBuffer, nowMs());
++		rxBuffer = {};
++		spiSelect(&spi);
++		// This fome-fw ChibiOS HAL has a void synchronous spiExchange API.
++		spiExchange(&spi, wire::appFrameSize, txBuffer.bytes, rxBuffer.bytes);
++		spiUnselect(&spi);
++		instance.complete(rxBuffer, true, nowMs());
++	}
++};
++Device device;
++bool started = false;
++} // namespace
++
++uint32_t nowMs() {
++	return static_cast<uint32_t>(NT2US(getTimeNowNt()) / 1000);
++}
++Link& link() {
++	return instance;
++}
++
++bool start(SPIDriver& driver, const SPIConfig& spiSettings) {
++	if (started) {
++		return true;
++	}
++	device.driver = &driver;
++	device.spiConfig = spiSettings;
++	started = registerBackgroundSpiDevice(device);
++	return started;
++}
++} // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/service.h b/firmware/hw_layer/g0_extension/service.h
+new file mode 100644
+index 0000000000..c2c101e2fc
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/service.h
+@@ -0,0 +1,31 @@
++#pragma once
++
++#include "link.h"
++
++namespace g0 {
++// Attach modules during board initialization, before start().
++Link& link();
++void registerDigital();
++bool start(SPIDriver& driver, const SPIConfig& spiSettings);
++uint32_t nowMs();
++
++template <class T>
++struct LockedModule final : Module {
++	T state;
++	bool request(wire::AppFrame& tx, uint32_t now) override {
++		chibios_rt::CriticalSectionLocker lock;
++		return state.request(tx, now);
++	}
++	void response(const wire::AppFrame& tx, const wire::AppFrame& rx, uint32_t now) override {
++		chibios_rt::CriticalSectionLocker lock;
++		state.response(tx, rx, now);
++	}
++	void disconnected() override {
++		chibios_rt::CriticalSectionLocker lock;
++		state.disconnected();
++	}
++};
++} // namespace g0
++
++// Implemented by the board, called after initSpiModules and before GPIO/sensors.
++void initG0Extension();
+diff --git a/firmware/hw_layer/hardware.cpp b/firmware/hw_layer/hardware.cpp
+index 3f27562d0c..42d3dc28a9 100644
+--- a/firmware/hw_layer/hardware.cpp
++++ b/firmware/hw_layer/hardware.cpp
+@@ -8,6 +8,10 @@
+ 
+ #include "pch.h"
+ 
++#if EFI_G0_EXTENSION
++#include "g0_extension/service.h"
++#endif
++
+ #include "trigger_input.h"
+ #include "can_hw.h"
+ #include "hardware.h"
+@@ -304,6 +308,9 @@ void initHardware() {
+ 
+ #if HAL_USE_SPI
+ 	initSpiModules();
++#if EFI_G0_EXTENSION
++	initG0Extension();
++#endif
+ #endif /* HAL_USE_SPI */
+ 
+ #if EFI_PROD_CODE && (BOARD_EXT_GPIOCHIPS > 0)
+diff --git a/firmware/hw_layer/hw_layer.mk b/firmware/hw_layer/hw_layer.mk
+index cc665d48d4..9c54fc4d61 100644
+--- a/firmware/hw_layer/hw_layer.mk
++++ b/firmware/hw_layer/hw_layer.mk
+@@ -41,3 +41,5 @@ endif
+ # '-include' is a magic kind of 'include' which would survive if file to be included is not found
+ #
+ -include $(PROJECT_DIR)/hw_layer/$(CPU_HWLAYER)/hw_ports.mk
++
++include $(PROJECT_DIR)/hw_layer/g0_extension/g0.mk

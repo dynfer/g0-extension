@@ -1,0 +1,35 @@
+{
+  "base": "b3ae7a9aa05fad9c68d7b3e3717ae81678579d10",
+  "commits": [
+    {
+      "part": 1,
+      "commit": "fd824ebbdfdf5966e8315e10322929fc18f222da",
+      "title": "g0: add versioned pipelined protocol and host tests"
+    },
+    {
+      "part": 2,
+      "commit": "f1785a8e5c56915022e99185d2165580e404b3a0",
+      "title": "g0: add opt-in background SPI transport and Atlas wiring"
+    },
+    {
+      "part": 3,
+      "commit": "94b9e7ffa56fddb0e47b32ae123912f056ac2ac4",
+      "title": "g0: add external ADC provider with freshness and filter recovery"
+    },
+    {
+      "part": 4,
+      "commit": "96da172a9c16ed0b5f208de44f01bf6d1b19df06",
+      "title": "g0: add digital inputs through the GPIO abstraction"
+    },
+    {
+      "part": 5,
+      "commit": "743bfe056c431e0ba19e82e383dbc0d57137eeeb",
+      "title": "g0: add queued lowsides and local PWM with verified acknowledgements"
+    },
+    {
+      "part": 6,
+      "commit": "b2d3f5aabaa35ada75c36cfd5dadbf8b04f9dbc3",
+      "title": "g0: add optional startup updater with image validation and readback"
+    }
+  ]
+}

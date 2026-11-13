@@ -1,0 +1,408 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sat, 14 Nov 2026 00:02:24 +0100
+Subject: [PATCH 5/6] g0: add queued lowsides and local PWM with verified
+ acknowledgements
+
+---
+ firmware/CHANGELOG.md                         |  1 +
+ .../boards/atlas/board_configuration.cpp      |  2 +
+ .../boards/atlas/connectors/g0_outputs.yaml   | 16 ++++
+ firmware/controllers/algo/rusefi_hw_enums.h   |  5 ++
+ firmware/controllers/system/efi_gpio.cpp      |  2 +-
+ firmware/controllers/system/efi_output.h      |  3 +
+ .../system/timer/pwm_generator_logic.cpp      | 19 +++++
+ firmware/hw_layer/g0_extension/g0.mk          |  5 +-
+ .../hw_layer/g0_extension/output_gpio.cpp     | 80 +++++++++++++++++++
+ firmware/hw_layer/g0_extension/output_gpio.h  |  8 ++
+ firmware/hw_layer/g0_extension/outputs.h      | 68 ++++++++++++++++
+ firmware/hw_layer/g0_extension/tests/test.cpp | 34 ++++++++
+ 12 files changed, 240 insertions(+), 3 deletions(-)
+ create mode 100644 firmware/config/boards/atlas/connectors/g0_outputs.yaml
+ create mode 100644 firmware/hw_layer/g0_extension/output_gpio.cpp
+ create mode 100644 firmware/hw_layer/g0_extension/output_gpio.h
+ create mode 100644 firmware/hw_layer/g0_extension/outputs.h
+
+diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
+index e823ab081a..2c61194279 100644
+--- a/firmware/CHANGELOG.md
++++ b/firmware/CHANGELOG.md
+@@ -37,6 +37,7 @@ or
+ ### Added
+  - Optional G0 expansion ADC support on Atlas (build with G0_EXTENSION=yes).
+  - Four digital switch inputs on the optional G0 expansion.
++ - Four asynchronous lowside outputs with local 1..500 Hz PWM on the G0 expansion.
+  - SD card logs are now organized into `YYYY/MM/DD` folders when the real-time clock is set. If the clock is not set, logs are still written to the root of the card with a sequential name.
+  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
+  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
+diff --git a/firmware/config/boards/atlas/board_configuration.cpp b/firmware/config/boards/atlas/board_configuration.cpp
+index e65241fdcb..36aafbf1f0 100644
+--- a/firmware/config/boards/atlas/board_configuration.cpp
++++ b/firmware/config/boards/atlas/board_configuration.cpp
+@@ -5,6 +5,7 @@
+ #if EFI_G0_EXTENSION && !EFI_BOOTLOADER
+ #include "g0_extension/service.h"
+ #include "g0_extension/analog.h"
++#include "g0_extension/output_gpio.h"
+ #include "mpu_util.h"
+ 
+ void initG0Extension() {
+@@ -23,6 +24,7 @@ void initG0Extension() {
+ 			.cfg2 = 0};
+ 	initSpiCs(&g0SpiConfig, Gpio::F6);
+ 	palSetPad(g0SpiConfig.ssport, g0SpiConfig.sspad);
++	g0::registerOutputs();
+ 	g0::registerDigital();
+ 	g0::registerAnalog(EFI_ADC_20 - EFI_ADC_0);
+ 	g0::start(*getSpiDevice(SPI_DEVICE_5), g0SpiConfig);
+diff --git a/firmware/config/boards/atlas/connectors/g0_outputs.yaml b/firmware/config/boards/atlas/connectors/g0_outputs.yaml
+new file mode 100644
+index 0000000000..12df506fab
+--- /dev/null
++++ b/firmware/config/boards/atlas/connectors/g0_outputs.yaml
+@@ -0,0 +1,16 @@
++pins:
++  - id: G0_OUT_1
++    class: outputs
++    ts_name: G0 Lowside 1
++
++  - id: G0_OUT_2
++    class: outputs
++    ts_name: G0 Lowside 2
++
++  - id: G0_OUT_3
++    class: outputs
++    ts_name: G0 Lowside 3
++
++  - id: G0_OUT_4
++    class: outputs
++    ts_name: G0 Lowside 4
+diff --git a/firmware/controllers/algo/rusefi_hw_enums.h b/firmware/controllers/algo/rusefi_hw_enums.h
+index 05e7557d01..2a13051748 100644
+--- a/firmware/controllers/algo/rusefi_hw_enums.h
++++ b/firmware/controllers/algo/rusefi_hw_enums.h
+@@ -239,6 +239,11 @@ enum class Gpio : uint16_t {
+ 	G0_DIGITAL_3 = 217,
+ 	G0_DIGITAL_4 = 218,
+ 
++	G0_OUT_1 = 219,
++	G0_OUT_2 = 220,
++	G0_OUT_3 = 221,
++	G0_OUT_4 = 222,
++
+ 	CAN_INPUT_0 = 249,
+ 	CAN_INPUT_1 = 250,
+ 	CAN_INPUT_2 = 251,
+diff --git a/firmware/controllers/system/efi_gpio.cpp b/firmware/controllers/system/efi_gpio.cpp
+index cc401738ac..c4918587e3 100644
+--- a/firmware/controllers/system/efi_gpio.cpp
++++ b/firmware/controllers/system/efi_gpio.cpp
+@@ -466,7 +466,7 @@ void OutputPin::setValue(int logicValue) {
+ 		setOnchipValue(electricalValue);
+ 	} else {
+ 		/* external pin */
+-		gpiochips_writePad(m_brainPin, logicValue);
++		gpiochips_writePad(m_brainPin, electricalValue);
+ 		/* TODO: check return value */
+ 	}
+ #else
+diff --git a/firmware/controllers/system/efi_output.h b/firmware/controllers/system/efi_output.h
+index fdf2439dcf..c102d0d4f6 100644
+--- a/firmware/controllers/system/efi_output.h
++++ b/firmware/controllers/system/efi_output.h
+@@ -36,6 +36,9 @@ public:
+ 	TEST_VIRTUAL void setValue(int logicValue);
+ 	void toggle();
+ 	bool getLogicValue() const;
++	pin_output_mode_e getOutputMode() const {
++		return m_mode;
++	}
+ 
+ 	brain_pin_diag_e getDiag() const;
+ 
+diff --git a/firmware/controllers/system/timer/pwm_generator_logic.cpp b/firmware/controllers/system/timer/pwm_generator_logic.cpp
+index ffac1dd6f0..6ac895eb70 100644
+--- a/firmware/controllers/system/timer/pwm_generator_logic.cpp
++++ b/firmware/controllers/system/timer/pwm_generator_logic.cpp
+@@ -9,6 +9,9 @@
+  */
+ 
+ #include "pch.h"
++#if EFI_G0_EXTENSION
++#include "g0_extension/output_gpio.h"
++#endif
+ 
+ #if EFI_PROD_CODE
+ #include "mpu_util.h"
+@@ -320,6 +323,22 @@ void startSimplePwm(SimplePwm* state, const char* msg, OutputPin* output, float
+ 		return;
+ 	}
+ 
++	// Let the expansion MCU generate edges locally; SPI only carries setpoints.
++#if EFI_G0_EXTENSION
++	if (g0::isOutput(output->m_brainPin)) {
++		chibios_rt::CriticalSectionLocker lock;
++		engine->scheduler.cancel(&state->scheduling);
++		state->m_stateChangeCallback = nullptr;
++		state->isStopRequested = false;
++		state->outputPins[0] = output;
++		state->hardPwm =
++				g0::startPwm(output->m_brainPin, frequency, dutyCycle, getElectricalValue0(output->getOutputMode()));
++		efiAssertVoid(ObdCode::CUSTOM_ERR_PWM_STATE_ASSERT, state->hardPwm, "G0 PWM range (1..500 Hz)");
++		return;
++	}
++	state->hardPwm = nullptr;
++#endif
++
+ 	state->seq.setSwitchTime(0, dutyCycle);
+ 	state->seq.setSwitchTime(1, 1);
+ 	state->seq.setChannelState(0, 0, false);
+diff --git a/firmware/hw_layer/g0_extension/g0.mk b/firmware/hw_layer/g0_extension/g0.mk
+index 9c85809b51..aeb1949756 100644
+--- a/firmware/hw_layer/g0_extension/g0.mk
++++ b/firmware/hw_layer/g0_extension/g0.mk
+@@ -1,8 +1,9 @@
+ ifeq ($(G0_EXTENSION),yes)
+-DDEFS += -DEFI_G0_EXTENSION=TRUE -DBOARD_G0_GPIOCHIP_COUNT=1
++DDEFS += -DEFI_G0_EXTENSION=TRUE -DBOARD_G0_GPIOCHIP_COUNT=2
+ HW_LAYER_EMS_CPP += \
+ 	$(PROJECT_DIR)/hw_layer/g0_extension/link.cpp \
+ 	$(PROJECT_DIR)/hw_layer/g0_extension/service.cpp \
+ 	$(PROJECT_DIR)/hw_layer/g0_extension/analog_provider.cpp \
+-	$(PROJECT_DIR)/hw_layer/g0_extension/digital_gpio.cpp
++	$(PROJECT_DIR)/hw_layer/g0_extension/digital_gpio.cpp \
++	$(PROJECT_DIR)/hw_layer/g0_extension/output_gpio.cpp
+ endif
+diff --git a/firmware/hw_layer/g0_extension/output_gpio.cpp b/firmware/hw_layer/g0_extension/output_gpio.cpp
+new file mode 100644
+index 0000000000..2e43fa3005
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/output_gpio.cpp
+@@ -0,0 +1,80 @@
++#include "pch.h"
++#include "outputs.h"
++#include "output_gpio.h"
++#include "service.h"
++#include "drivers/gpio/gpio_ext.h"
++#include "mpu_util.h"
++#include <cmath>
++
++namespace g0 {
++namespace {
++LockedModule<Outputs> outputs;
++class Pwm final : public hardware_pwm {
++public:
++	size_t index = 0;
++	uint32_t frequency = 0;
++	bool active = false;
++	bool inverted = false;
++	void setDuty(float duty) override {
++		chibios_rt::CriticalSectionLocker lock;
++		if (!active || !std::isfinite(duty) || duty < 0 || duty > 1) {
++			return;
++		}
++		outputs.state.set(index, frequency, uint16_t((inverted ? 1 - duty : duty) * wire::outputDutyMax + 0.5f));
++	}
++};
++Pwm pwms[wire::outputCount];
++
++class OutputChip final : public GpioChip {
++	int init() override {
++		return 0;
++	}
++	int setPadMode(size_t pin, iomode_t mode) override {
++		if (pin >= wire::outputCount) {
++			return -1;
++		}
++		if ((mode & PAL_STM32_MODE_MASK) == PAL_MODE_OUTPUT_PUSHPULL) {
++			return 0;
++		}
++		// efiSetPadUnused requests input/pullup. Always disable the remote driver.
++		return writePad(pin, 0);
++	}
++	int writePad(size_t pin, int value) override {
++		if (pin >= wire::outputCount) {
++			return -1;
++		}
++		chibios_rt::CriticalSectionLocker lock;
++		pwms[pin].active = false;
++		return outputs.state.set(pin, 0, value ? wire::outputDutyMax : 0) ? 0 : -1;
++	}
++};
++OutputChip chip;
++} // namespace
++
++bool isOutput(brain_pin_e pin) {
++	return pin >= Gpio::G0_OUT_1 && pin <= Gpio::G0_OUT_4;
++}
++
++hardware_pwm* startPwm(brain_pin_e pin, float frequency, float duty, bool inverted) {
++	if (!isOutput(pin) || !std::isfinite(frequency) || frequency < 1 || frequency > 500 || !std::isfinite(duty) ||
++		duty < 0 || duty > 1) {
++		return nullptr;
++	}
++	chibios_rt::CriticalSectionLocker lock;
++	auto& pwm = pwms[pin - Gpio::G0_OUT_1];
++	pwm.index = pin - Gpio::G0_OUT_1;
++	pwm.frequency = uint32_t(frequency + 0.5f);
++	pwm.active = true;
++	pwm.inverted = inverted;
++	pwm.setDuty(duty);
++	return &pwm;
++}
++
++void registerOutputs() {
++	efiAssertVoid(
++			ObdCode::CUSTOM_ERR_ASSERT,
++			gpiochip_register(Gpio::G0_OUT_1, "G0 lowsides", chip, wire::outputCount) >= 0,
++			"G0 outputs");
++	link().attach(outputs);
++}
++} // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/output_gpio.h b/firmware/hw_layer/g0_extension/output_gpio.h
+new file mode 100644
+index 0000000000..f5d82442e0
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/output_gpio.h
+@@ -0,0 +1,8 @@
++#pragma once
++
++struct hardware_pwm;
++namespace g0 {
++void registerOutputs();
++bool isOutput(brain_pin_e pin);
++hardware_pwm* startPwm(brain_pin_e pin, float frequency, float duty, bool inverted);
++} // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/outputs.h b/firmware/hw_layer/g0_extension/outputs.h
+new file mode 100644
+index 0000000000..9ca1bf5f09
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/outputs.h
+@@ -0,0 +1,68 @@
++#pragma once
++#include "link.h"
++
++namespace g0 {
++class Outputs : public Module {
++public:
++	bool set(size_t index, uint32_t frequency, uint16_t duty) {
++		if (index >= wire::outputCount || frequency > 500 || duty > wire::outputDutyMax) {
++			return false;
++		}
++		auto& value = m_values[index];
++		if (value.frequency != frequency || value.duty != duty) {
++			value.dirty = true;
++		}
++		value.frequency = frequency;
++		value.duty = duty;
++		return true;
++	}
++	bool request(wire::AppFrame& tx, uint32_t nowMs) override {
++		for (size_t i = 0; i < wire::outputCount; i++) {
++			const size_t index = (m_next + i) % wire::outputCount;
++			auto& value = m_values[index];
++			if (value.pending || (!value.dirty && uint32_t(nowMs - value.updated) < 1000)) {
++				continue;
++			}
++			if (value.frequency == 0 && value.duty == 0) {
++				tx.indexedRequest = {wire::cmdDisableOutput, uint8_t(index + 1)};
++			} else {
++				tx.setOutputRequest = {wire::cmdSetOutput, uint8_t(index + 1), value.frequency, value.duty};
++			}
++			value.pending = true;
++			m_next = (index + 1) % wire::outputCount;
++			return true;
++		}
++		return false;
++	}
++	void response(const wire::AppFrame& tx, const wire::AppFrame& rx, uint32_t nowMs) override {
++		const size_t index = tx.bytes[1] - 1;
++		if (index >= wire::outputCount) {
++			return;
++		}
++		auto& value = m_values[index];
++		const uint32_t frequency = tx.bytes[0] == wire::cmdSetOutput ? tx.setOutputRequest.frequencyHz : 0;
++		const uint16_t duty = tx.bytes[0] == wire::cmdSetOutput ? tx.setOutputRequest.duty : 0;
++		value.pending = false;
++		value.dirty = rx.outputResponse.frequencyHz != frequency || rx.outputResponse.duty != duty ||
++					  value.frequency != frequency || value.duty != duty;
++		value.updated = nowMs;
++	}
++	void disconnected() override {
++		for (auto& value : m_values) {
++			value.pending = false;
++			value.dirty = true;
++		}
++	}
++
++private:
++	struct State {
++		uint32_t frequency = 0;
++		uint16_t duty = 0;
++		bool dirty = true;
++		bool pending = false;
++		uint32_t updated = 0;
++	};
++	State m_values[wire::outputCount];
++	size_t m_next = 0;
++};
++} // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/tests/test.cpp b/firmware/hw_layer/g0_extension/tests/test.cpp
+index 97c3dff208..fd1b721595 100644
+--- a/firmware/hw_layer/g0_extension/tests/test.cpp
++++ b/firmware/hw_layer/g0_extension/tests/test.cpp
+@@ -1,6 +1,7 @@
+ #include "../link.h"
+ #include "../analog.h"
+ #include "../digital.h"
++#include "../outputs.h"
+ #include <cassert>
+ #include <cstdio>
+ 
+@@ -153,6 +154,38 @@ static void testDigital() {
+ 	assert(!digital.setMode(0, InputMode(2)));
+ }
+ 
++static void testOutputs() {
++	Outputs outputs;
++	wire::AppFrame tx = {};
++	assert(!outputs.set(4, 0, 0));
++	assert(!outputs.set(0, 501, 0));
++	assert(!outputs.set(0, 1, 10001));
++	// Acknowledge startup off commands.
++	for (unsigned i = 0; i < wire::outputCount; i++) {
++		assert(outputs.request(tx, 0));
++		assert(tx.bytes[0] == wire::cmdDisableOutput);
++		outputs.response(tx, {}, 0);
++	}
++	assert(!outputs.request(tx, 10));
++	assert(outputs.set(0, 100, 5000));
++	assert(outputs.request(tx, 20));
++	assert(tx.setOutputRequest.frequencyHz == 100);
++	assert(!outputs.request(tx, 20));  // Same output cannot have two requests in flight.
++	assert(outputs.set(0, 200, 2500)); // Producer changes while ACK is in flight.
++	wire::AppFrame rx = {};
++	rx.outputResponse.frequencyHz = 100;
++	rx.outputResponse.duty = 5000;
++	outputs.response(tx, rx, 30);
++	assert(outputs.request(tx, 40));
++	assert(tx.setOutputRequest.frequencyHz == 200 && tx.setOutputRequest.duty == 2500);
++	rx.outputResponse.frequencyHz = 200;
++	rx.outputResponse.duty = 2500;
++	outputs.response(tx, rx, 50);
++	assert(!outputs.request(tx, 60));
++	outputs.disconnected();
++	assert(outputs.request(tx, 70));
++}
++
+ static void testFairnessAndStall() {
+ 	Link link;
+ 	TestModule modules[3];
+@@ -192,6 +225,7 @@ static void testFairnessAndStall() {
+ 
+ int main() {
+ 	testFairnessAndStall();
++	testOutputs();
+ 	testDigital();
+ 	testAnalog();
+ 	testLink();

@@ -1,0 +1,330 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sat, 14 Nov 2026 00:02:24 +0100
+Subject: [PATCH 4/6] g0: add digital inputs through the GPIO abstraction
+
+---
+ firmware/CHANGELOG.md                         |  1 +
+ .../boards/atlas/board_configuration.cpp      |  1 +
+ .../boards/atlas/connectors/g0_digital.yaml   | 16 ++++
+ firmware/controllers/algo/rusefi_hw_enums.h   |  5 ++
+ firmware/hw_layer/g0_extension/digital.h      | 80 +++++++++++++++++++
+ .../hw_layer/g0_extension/digital_gpio.cpp    | 36 +++++++++
+ firmware/hw_layer/g0_extension/g0.mk          |  5 +-
+ firmware/hw_layer/g0_extension/tests/test.cpp | 33 ++++++++
+ firmware/hw_layer/io_pins.cpp                 |  8 +-
+ firmware/hw_layer/smart_gpio.h                |  7 +-
+ 10 files changed, 185 insertions(+), 7 deletions(-)
+ create mode 100644 firmware/config/boards/atlas/connectors/g0_digital.yaml
+ create mode 100644 firmware/hw_layer/g0_extension/digital.h
+ create mode 100644 firmware/hw_layer/g0_extension/digital_gpio.cpp
+
+diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
+index 4a4df217a8..e823ab081a 100644
+--- a/firmware/CHANGELOG.md
++++ b/firmware/CHANGELOG.md
+@@ -36,6 +36,7 @@ or
+ 
+ ### Added
+  - Optional G0 expansion ADC support on Atlas (build with G0_EXTENSION=yes).
++ - Four digital switch inputs on the optional G0 expansion.
+  - SD card logs are now organized into `YYYY/MM/DD` folders when the real-time clock is set. If the clock is not set, logs are still written to the root of the card with a sequential name.
+  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
+  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
+diff --git a/firmware/config/boards/atlas/board_configuration.cpp b/firmware/config/boards/atlas/board_configuration.cpp
+index 062fd0998b..e65241fdcb 100644
+--- a/firmware/config/boards/atlas/board_configuration.cpp
++++ b/firmware/config/boards/atlas/board_configuration.cpp
+@@ -23,6 +23,7 @@ void initG0Extension() {
+ 			.cfg2 = 0};
+ 	initSpiCs(&g0SpiConfig, Gpio::F6);
+ 	palSetPad(g0SpiConfig.ssport, g0SpiConfig.sspad);
++	g0::registerDigital();
+ 	g0::registerAnalog(EFI_ADC_20 - EFI_ADC_0);
+ 	g0::start(*getSpiDevice(SPI_DEVICE_5), g0SpiConfig);
+ }
+diff --git a/firmware/config/boards/atlas/connectors/g0_digital.yaml b/firmware/config/boards/atlas/connectors/g0_digital.yaml
+new file mode 100644
+index 0000000000..de4f3113f9
+--- /dev/null
++++ b/firmware/config/boards/atlas/connectors/g0_digital.yaml
+@@ -0,0 +1,16 @@
++pins:
++  - id: G0_DIGITAL_1
++    class: switch_inputs
++    ts_name: G0 Digital 1
++
++  - id: G0_DIGITAL_2
++    class: switch_inputs
++    ts_name: G0 Digital 2
++
++  - id: G0_DIGITAL_3
++    class: switch_inputs
++    ts_name: G0 Digital 3
++
++  - id: G0_DIGITAL_4
++    class: switch_inputs
++    ts_name: G0 Digital 4
+diff --git a/firmware/controllers/algo/rusefi_hw_enums.h b/firmware/controllers/algo/rusefi_hw_enums.h
+index 69a82e1dc4..05e7557d01 100644
+--- a/firmware/controllers/algo/rusefi_hw_enums.h
++++ b/firmware/controllers/algo/rusefi_hw_enums.h
+@@ -234,6 +234,11 @@ enum class Gpio : uint16_t {
+ 	TLE6240_PIN_15 = 213,
+ 	TLE6240_PIN_16 = 214,
+ 
++	G0_DIGITAL_1 = 215,
++	G0_DIGITAL_2 = 216,
++	G0_DIGITAL_3 = 217,
++	G0_DIGITAL_4 = 218,
++
+ 	CAN_INPUT_0 = 249,
+ 	CAN_INPUT_1 = 250,
+ 	CAN_INPUT_2 = 251,
+diff --git a/firmware/hw_layer/g0_extension/digital.h b/firmware/hw_layer/g0_extension/digital.h
+new file mode 100644
+index 0000000000..2193ffda61
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/digital.h
+@@ -0,0 +1,80 @@
++#pragma once
++#include "link.h"
++
++namespace g0 {
++// SENT is intentionally excluded: the current G0 decoder does not check CRCs.
++enum class InputMode : uint8_t {
++	Digital = 0,
++	Frequency = 1
++};
++
++class Digital : public Module {
++public:
++	bool setMode(size_t index, InputMode mode) {
++		if (index >= wire::digitalInputCount || uint8_t(mode) > uint8_t(InputMode::Frequency)) {
++			return false;
++		}
++		m_modes[index] = mode;
++		m_ready = false;
++		return true;
++	}
++	bool request(wire::AppFrame& tx, uint32_t) override {
++		for (size_t i = 0; i < wire::digitalInputCount; i++) {
++			if (m_configured[i] && m_applied[i] == m_modes[i]) {
++				continue;
++			}
++			tx.setInputModeRequest = {wire::cmdSetInputMode, uint8_t(i + 1), uint8_t(m_modes[i])};
++			return true;
++		}
++		tx.bytes[0] = wire::cmdReadDigitalAll;
++		return true;
++	}
++	void response(const wire::AppFrame& tx, const wire::AppFrame& rx, uint32_t nowMs) override {
++		if (tx.bytes[0] == wire::cmdSetInputMode) {
++			const size_t index = tx.setInputModeRequest.input - 1;
++			if (index >= wire::digitalInputCount) {
++				return;
++			}
++			m_applied[index] = InputMode(rx.digitalResponse.mode);
++			m_configured[index] = rx.digitalResponse.mode == tx.setInputModeRequest.mode;
++			return;
++		}
++		m_ready = false;
++		if (rx.digitalAllResponse.inputCount != wire::digitalInputCount) {
++			return;
++		}
++		for (size_t i = 0; i < wire::digitalInputCount; i++) {
++			const auto& input = rx.digitalAllResponse.inputs[i];
++			if (input.mode != uint8_t(m_modes[i]) || input.dutyPermille > 1000 || (input.flags & ~3U)) {
++				return;
++			}
++		}
++		for (size_t i = 0; i < wire::digitalInputCount; i++) {
++			m_inputs[i] = rx.digitalAllResponse.inputs[i];
++		}
++		m_updated = nowMs;
++		m_ready = true;
++	}
++	void disconnected() override {
++		m_ready = false;
++		for (auto& configured : m_configured) {
++			configured = false;
++		}
++	}
++	bool sample(size_t index, uint32_t nowMs, wire::DigitalAllState& sample) const {
++		if (index >= wire::digitalInputCount || !m_ready || uint32_t(nowMs - m_updated) >= SampleTimeoutMs) {
++			return false;
++		}
++		sample = m_inputs[index];
++		return true;
++	}
++
++private:
++	InputMode m_modes[wire::digitalInputCount] = {};
++	InputMode m_applied[wire::digitalInputCount] = {};
++	bool m_configured[wire::digitalInputCount] = {};
++	wire::DigitalAllState m_inputs[wire::digitalInputCount] = {};
++	uint32_t m_updated = 0;
++	bool m_ready = false;
++};
++} // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/digital_gpio.cpp b/firmware/hw_layer/g0_extension/digital_gpio.cpp
+new file mode 100644
+index 0000000000..1eb61488c5
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/digital_gpio.cpp
+@@ -0,0 +1,36 @@
++#include "pch.h"
++#include "digital.h"
++#include "service.h"
++#include "drivers/gpio/gpio_ext.h"
++
++namespace g0 {
++namespace {
++LockedModule<Digital> digital;
++class Inputs final : public GpioChip {
++	int init() override {
++		return 0;
++	}
++	int setPadMode(size_t pin, iomode_t mode) override {
++		// Pull resistors are determined by the expansion board hardware.
++		return pin < wire::digitalInputCount && mode == PAL_MODE_INPUT ? 0 : -1;
++	}
++	int readPad(size_t pin) override {
++		chibios_rt::CriticalSectionLocker lock;
++		wire::DigitalAllState value;
++		if (!digital.state.sample(pin, nowMs(), value)) {
++			return -1;
++		}
++		return (value.flags & 1) != 0;
++	}
++};
++Inputs inputs;
++} // namespace
++
++void registerDigital() {
++	efiAssertVoid(
++			ObdCode::CUSTOM_ERR_ASSERT,
++			gpiochip_register(Gpio::G0_DIGITAL_1, "G0 inputs", inputs, wire::digitalInputCount) >= 0,
++			"G0 inputs");
++	link().attach(digital);
++}
++} // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/g0.mk b/firmware/hw_layer/g0_extension/g0.mk
+index 208233030b..9c85809b51 100644
+--- a/firmware/hw_layer/g0_extension/g0.mk
++++ b/firmware/hw_layer/g0_extension/g0.mk
+@@ -1,7 +1,8 @@
+ ifeq ($(G0_EXTENSION),yes)
+-DDEFS += -DEFI_G0_EXTENSION=TRUE
++DDEFS += -DEFI_G0_EXTENSION=TRUE -DBOARD_G0_GPIOCHIP_COUNT=1
+ HW_LAYER_EMS_CPP += \
+ 	$(PROJECT_DIR)/hw_layer/g0_extension/link.cpp \
+ 	$(PROJECT_DIR)/hw_layer/g0_extension/service.cpp \
+-	$(PROJECT_DIR)/hw_layer/g0_extension/analog_provider.cpp
++	$(PROJECT_DIR)/hw_layer/g0_extension/analog_provider.cpp \
++	$(PROJECT_DIR)/hw_layer/g0_extension/digital_gpio.cpp
+ endif
+diff --git a/firmware/hw_layer/g0_extension/tests/test.cpp b/firmware/hw_layer/g0_extension/tests/test.cpp
+index db0e5818a7..97c3dff208 100644
+--- a/firmware/hw_layer/g0_extension/tests/test.cpp
++++ b/firmware/hw_layer/g0_extension/tests/test.cpp
+@@ -1,5 +1,6 @@
+ #include "../link.h"
+ #include "../analog.h"
++#include "../digital.h"
+ #include <cassert>
+ #include <cstdio>
+ 
+@@ -121,6 +122,37 @@ static void testAnalog() {
+ 	assert(std::isnan(analog.voltage(0, 220)));
+ }
+ 
++static void testDigital() {
++	Digital digital;
++	wire::AppFrame tx = {};
++	wire::DigitalAllState value;
++	assert(!digital.sample(0, 0, value));
++	for (unsigned i = 0; i < wire::digitalInputCount; i++) {
++		assert(digital.request(tx, 0));
++		assert(tx.setInputModeRequest.input == i + 1);
++		auto rx = reply(wire::cmdSetInputMode, wire::digitalPayloadLength);
++		rx.digitalResponse.mode = wire::digitalMode;
++		digital.response(tx, rx, 0);
++	}
++	digital.request(tx, 10);
++	assert(tx.bytes[0] == wire::cmdReadDigitalAll);
++	auto rx = reply(wire::cmdReadDigitalAll, wire::digitalAllPayloadLength);
++	rx.digitalAllResponse.inputCount = wire::digitalInputCount;
++	rx.digitalAllResponse.inputs[3].flags = 3;
++	digital.response(tx, rx, 20);
++	assert(digital.sample(3, 20, value) && value.flags == 3);
++	assert(!digital.sample(4, 20, value));
++	assert(!digital.sample(3, 270, value));
++	rx.digitalAllResponse.inputCount--;
++	digital.response(tx, rx, 30);
++	assert(!digital.sample(3, 30, value));
++	digital.disconnected();
++	digital.request(tx, 40);
++	assert(tx.bytes[0] == wire::cmdSetInputMode);
++	assert(!digital.setMode(4, InputMode::Digital));
++	assert(!digital.setMode(0, InputMode(2)));
++}
++
+ static void testFairnessAndStall() {
+ 	Link link;
+ 	TestModule modules[3];
+@@ -160,6 +192,7 @@ static void testFairnessAndStall() {
+ 
+ int main() {
+ 	testFairnessAndStall();
++	testDigital();
+ 	testAnalog();
+ 	testLink();
+ 	testValidation();
+diff --git a/firmware/hw_layer/io_pins.cpp b/firmware/hw_layer/io_pins.cpp
+index 6884d6e7da..5cee352d98 100644
+--- a/firmware/hw_layer/io_pins.cpp
++++ b/firmware/hw_layer/io_pins.cpp
+@@ -139,16 +139,16 @@ bool efiReadPin(Gpio pin) {
+ 		return palReadPad(getHwPort("readPin", pin), getHwPin("readPin", pin));
+ 	}
+ 
++	if (pin >= Gpio::CAN_INPUT_0 && pin <= Gpio::CAN_INPUT_7) {
++		return readCanVirtualInput(pin - Gpio::CAN_INPUT_0);
++	}
++
+ #if (BOARD_EXT_GPIOCHIPS > 0)
+ 	if (brain_pin_is_ext(pin)) {
+ 		return (gpiochips_readPad(pin) > 0);
+ 	}
+ #endif
+ 
+-	if (pin >= Gpio::CAN_INPUT_0 && pin <= Gpio::CAN_INPUT_7) {
+-		return readCanVirtualInput(pin - Gpio::CAN_INPUT_0);
+-	}
+-
+ 	/* incorrect pin */
+ 	return false;
+ }
+diff --git a/firmware/hw_layer/smart_gpio.h b/firmware/hw_layer/smart_gpio.h
+index dd65c26c91..19b1c29a41 100644
+--- a/firmware/hw_layer/smart_gpio.h
++++ b/firmware/hw_layer/smart_gpio.h
+@@ -15,11 +15,16 @@
+ #include "drivers/gpio/drv8860.h"
+ #endif /* EFI_PROD_CODE */
+ 
++#ifndef BOARD_G0_GPIOCHIP_COUNT
++#define BOARD_G0_GPIOCHIP_COUNT 0
++#endif
++
+ #if EFI_UNIT_TEST
+ #define BOARD_EXT_GPIOCHIPS 3
+ #else
+ #define BOARD_EXT_GPIOCHIPS                                                                                            \
+-	(BOARD_TLE6240_COUNT + BOARD_MC33972_COUNT + BOARD_TLE8888_COUNT + BOARD_DRV8860_COUNT + BOARD_MC33810_COUNT + 0)
++	(BOARD_TLE6240_COUNT + BOARD_MC33972_COUNT + BOARD_TLE8888_COUNT + BOARD_DRV8860_COUNT + BOARD_MC33810_COUNT +     \
++	 BOARD_G0_GPIOCHIP_COUNT + 0)
+ #endif
+ 
+ void initSmartGpio();

@@ -1,0 +1,536 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Sat, 14 Nov 2026 00:02:24 +0100
+Subject: [PATCH 1/6] g0: add versioned pipelined protocol and host tests
+
+---
+ .../hw_layer/g0_extension/g0_spi_protocol.h   | 161 ++++++++++++++++++
+ firmware/hw_layer/g0_extension/link.cpp       | 126 ++++++++++++++
+ firmware/hw_layer/g0_extension/link.h         |  50 ++++++
+ .../g0_extension/tests/CMakeLists.txt         |  12 ++
+ firmware/hw_layer/g0_extension/tests/test.cpp | 139 +++++++++++++++
+ 5 files changed, 488 insertions(+)
+ create mode 100644 firmware/hw_layer/g0_extension/g0_spi_protocol.h
+ create mode 100644 firmware/hw_layer/g0_extension/link.cpp
+ create mode 100644 firmware/hw_layer/g0_extension/link.h
+ create mode 100644 firmware/hw_layer/g0_extension/tests/CMakeLists.txt
+ create mode 100644 firmware/hw_layer/g0_extension/tests/test.cpp
+
+diff --git a/firmware/hw_layer/g0_extension/g0_spi_protocol.h b/firmware/hw_layer/g0_extension/g0_spi_protocol.h
+new file mode 100644
+index 0000000000..f2b6c9d193
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/g0_spi_protocol.h
+@@ -0,0 +1,161 @@
++#pragma once
++
++#include <stdint.h>
++
++namespace g0_spi_protocol {
++
++static constexpr uint8_t analogChannelCount = 12U;
++static constexpr uint8_t digitalInputCount = 4U;
++static constexpr uint8_t outputCount = 4U;
++static constexpr uint16_t outputDutyMax = 10000U;
++
++static constexpr uint8_t appFrameSize = 36U;
++static constexpr uint8_t appHeaderSize = 4U;
++
++static constexpr uint8_t versionPayloadLength = 4U;
++static constexpr uint8_t analogPayloadLength = 26U;
++static constexpr uint8_t digitalPayloadLength = 17U;
++static constexpr uint8_t digitalAllPayloadLength = 25U;
++static constexpr uint8_t sentPayloadLength = 9U;
++static constexpr uint8_t outputPayloadLength = 7U;
++
++static constexpr uint8_t cmdNop = 0x00U;
++static constexpr uint8_t cmdReadVersion = 0x01U;
++static constexpr uint8_t cmdReadAnalog = 0x10U;
++static constexpr uint8_t cmdReadDigital = 0x11U;
++static constexpr uint8_t cmdReadDigitalAll = 0x12U;
++static constexpr uint8_t cmdReadSent = 0x13U;
++static constexpr uint8_t cmdSetOutput = 0x20U;
++static constexpr uint8_t cmdDisableOutput = 0x21U;
++static constexpr uint8_t cmdReadOutput = 0x22U;
++static constexpr uint8_t cmdSetInputMode = 0x30U;
++static constexpr uint8_t cmdEnterUpdate = 0xA5U;
++
++static constexpr uint8_t statusReady = 0x00U;
++static constexpr uint8_t statusUpdateMode = 0x01U;
++
++static constexpr uint8_t resultOk = 0x00U;
++static constexpr uint8_t resultInvalid = 0x01U;
++static constexpr uint8_t resultRange = 0x02U;
++static constexpr uint8_t resultBusy = 0x03U;
++
++static constexpr uint8_t digitalMode = 0x00U;
++
++#if defined(__GNUC__)
++#define G0_SPI_PROTOCOL_PACKED __attribute__((packed))
++#else
++#define G0_SPI_PROTOCOL_PACKED
++#endif
++
++struct G0_SPI_PROTOCOL_PACKED ResponseHeader {
++	uint8_t status;
++	uint8_t result;
++	uint8_t command;
++	uint8_t payloadLength;
++};
++
++struct G0_SPI_PROTOCOL_PACKED CommandRequest {
++	uint8_t command;
++};
++
++struct G0_SPI_PROTOCOL_PACKED IndexedRequest {
++	uint8_t command;
++	uint8_t index;
++};
++
++struct G0_SPI_PROTOCOL_PACKED SetInputModeRequest {
++	uint8_t command;
++	uint8_t input;
++	uint8_t mode;
++};
++
++struct G0_SPI_PROTOCOL_PACKED SetOutputRequest {
++	uint8_t command;
++	uint8_t output;
++	uint32_t frequencyHz;
++	uint16_t duty;
++};
++
++struct G0_SPI_PROTOCOL_PACKED VersionResponse {
++	ResponseHeader header;
++	uint32_t version;
++};
++
++struct G0_SPI_PROTOCOL_PACKED AnalogResponse {
++	ResponseHeader header;
++	uint8_t ready;
++	uint8_t channelCount;
++	uint16_t millivolts[analogChannelCount];
++};
++
++struct G0_SPI_PROTOCOL_PACKED DigitalResponse {
++	ResponseHeader header;
++	uint8_t input;
++	uint8_t mode;
++	uint8_t flags;
++	uint32_t frequencyHz;
++	uint16_t dutyPermille;
++	uint16_t periodUs;
++	uint16_t highTimeUs;
++	uint32_t captureCount;
++};
++
++struct G0_SPI_PROTOCOL_PACKED DigitalAllState {
++	uint8_t mode;
++	uint8_t flags;
++	uint16_t frequencyHz;
++	uint16_t dutyPermille;
++};
++
++struct G0_SPI_PROTOCOL_PACKED DigitalAllResponse {
++	ResponseHeader header;
++	uint8_t inputCount;
++	DigitalAllState inputs[digitalInputCount];
++};
++
++struct G0_SPI_PROTOCOL_PACKED SentResponse {
++	ResponseHeader header;
++	uint8_t input;
++	uint32_t data;
++	uint8_t status;
++	uint8_t crc;
++	uint8_t nibbleCount;
++	uint8_t flags;
++};
++
++struct G0_SPI_PROTOCOL_PACKED OutputResponse {
++	ResponseHeader header;
++	uint8_t output;
++	uint32_t frequencyHz;
++	uint16_t duty;
++};
++
++union AppFrame {
++	uint8_t bytes[appFrameSize];
++	CommandRequest commandRequest;
++	IndexedRequest indexedRequest;
++	SetInputModeRequest setInputModeRequest;
++	SetOutputRequest setOutputRequest;
++	ResponseHeader responseHeader;
++	VersionResponse versionResponse;
++	AnalogResponse analogResponse;
++	DigitalResponse digitalResponse;
++	DigitalAllResponse digitalAllResponse;
++	SentResponse sentResponse;
++	OutputResponse outputResponse;
++};
++
++static_assert(sizeof(ResponseHeader) == appHeaderSize, "Unexpected G0 SPI response header size");
++static_assert(sizeof(VersionResponse) - appHeaderSize == versionPayloadLength, "Unexpected G0 version payload size");
++static_assert(sizeof(AnalogResponse) - appHeaderSize == analogPayloadLength, "Unexpected G0 analog payload size");
++static_assert(sizeof(DigitalResponse) - appHeaderSize == digitalPayloadLength, "Unexpected G0 digital payload size");
++static_assert(
++		sizeof(DigitalAllResponse) - appHeaderSize == digitalAllPayloadLength,
++		"Unexpected G0 digital-all payload size");
++static_assert(sizeof(SentResponse) - appHeaderSize == sentPayloadLength, "Unexpected G0 SENT payload size");
++static_assert(sizeof(OutputResponse) - appHeaderSize == outputPayloadLength, "Unexpected G0 output payload size");
++static_assert(sizeof(AppFrame) == appFrameSize, "Unexpected G0 SPI app frame size");
++
++#undef G0_SPI_PROTOCOL_PACKED
++
++} // namespace g0_spi_protocol
+diff --git a/firmware/hw_layer/g0_extension/link.cpp b/firmware/hw_layer/g0_extension/link.cpp
+new file mode 100644
+index 0000000000..2adfa680a8
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/link.cpp
+@@ -0,0 +1,126 @@
++#include "link.h"
++
++namespace g0 {
++bool validResponse(const wire::AppFrame& tx, const wire::AppFrame& rx) {
++	const auto& h = rx.responseHeader;
++	if (h.status != wire::statusReady || h.result != wire::resultOk || h.command != tx.bytes[0]) {
++		return false;
++	}
++	uint8_t size;
++	switch (tx.bytes[0]) {
++		case wire::cmdNop:
++			size = 0;
++			break;
++		case wire::cmdReadVersion:
++			size = wire::versionPayloadLength;
++			break;
++		case wire::cmdReadAnalog:
++			size = wire::analogPayloadLength;
++			break;
++		case wire::cmdReadDigitalAll:
++			size = wire::digitalAllPayloadLength;
++			break;
++		case wire::cmdReadDigital:
++		case wire::cmdSetInputMode:
++			size = wire::digitalPayloadLength;
++			if (rx.digitalResponse.input != tx.bytes[1]) {
++				return false;
++			}
++			break;
++		case wire::cmdReadSent:
++			size = wire::sentPayloadLength;
++			if (rx.sentResponse.input != tx.bytes[1]) {
++				return false;
++			}
++			break;
++		case wire::cmdReadOutput:
++		case wire::cmdSetOutput:
++		case wire::cmdDisableOutput:
++			size = wire::outputPayloadLength;
++			if (rx.outputResponse.output != tx.bytes[1]) {
++				return false;
++			}
++			break;
++		default:
++			return false;
++	}
++	return h.payloadLength == size;
++}
++
++bool Link::attach(Module& module) {
++	for (size_t i = 0; i < m_count; i++) {
++		if (m_modules[i] == &module) {
++			return true;
++		}
++	}
++	if (m_count == MaxModules) {
++		return false;
++	}
++	m_modules[m_count++] = &module;
++	return true;
++}
++
++void Link::prepare(wire::AppFrame& tx, uint32_t nowMs) {
++	tx = {};
++	m_sendingModule = nullptr;
++	if (!m_online) {
++		tx.bytes[0] = wire::cmdReadVersion;
++	} else {
++		// Advance after every slot, even when a module has nothing to send.
++		// Continuously changing outputs cannot starve sensor polls.
++		for (size_t i = 0; i < m_count; i++) {
++			auto* module = m_modules[m_next];
++			m_next = (m_next + 1) % m_count;
++			if (module->request(tx, nowMs)) {
++				m_sendingModule = module;
++				break;
++			}
++			tx = {};
++		}
++		if (!m_sendingModule) {
++			tx.bytes[0] = wire::cmdReadVersion;
++		}
++	}
++	m_sending = tx;
++}
++
++void Link::disconnect() {
++	m_online = false;
++	m_hasPending = false;
++	m_pendingModule = nullptr;
++	for (size_t i = 0; i < m_count; i++) {
++		m_modules[i]->disconnected();
++	}
++}
++
++void Link::complete(const wire::AppFrame& rx, bool transferred, uint32_t nowMs) {
++	if (!transferred) {
++		m_errors++;
++		disconnect();
++		return;
++	}
++	if (m_hasPending) {
++		if (uint32_t(nowMs - m_pendingTime) >= SampleTimeoutMs || !validResponse(m_pending, rx)) {
++			m_errors++;
++			disconnect();
++			// The request sent during the failed exchange may still be executed.
++			// Discard its reply, then re-establish the version pipeline.
++			return;
++		}
++		if (m_pending.bytes[0] == wire::cmdReadVersion) {
++			if (rx.versionResponse.version != AppVersion) {
++				m_errors++;
++				disconnect();
++				return;
++			}
++			m_online = true;
++		} else if (m_pendingModule) {
++			m_pendingModule->response(m_pending, rx, nowMs);
++		}
++	}
++	m_pending = m_sending;
++	m_pendingModule = m_sendingModule;
++	m_hasPending = true;
++	m_pendingTime = nowMs;
++}
++} // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/link.h b/firmware/hw_layer/g0_extension/link.h
+new file mode 100644
+index 0000000000..36f3d5c570
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/link.h
+@@ -0,0 +1,50 @@
++#pragma once
++
++#include "g0_spi_protocol.h"
++#include <stddef.h>
++#include <stdint.h>
++
++namespace g0 {
++namespace wire = g0_spi_protocol;
++
++constexpr uint32_t AppVersion = 8;
++constexpr uint32_t SampleTimeoutMs = 250;
++
++// All module callbacks run on the SPI worker. Adapters must lock shared state
++// in these callbacks and in readers/writers, never across an SPI transfer.
++struct Module {
++	virtual bool request(wire::AppFrame& tx, uint32_t nowMs) = 0;
++	virtual void response(const wire::AppFrame& tx, const wire::AppFrame& rx, uint32_t nowMs) = 0;
++	virtual void disconnected() = 0;
++};
++
++class Link {
++public:
++	bool attach(Module& module);
++	void prepare(wire::AppFrame& tx, uint32_t nowMs);
++	void complete(const wire::AppFrame& rx, bool transferred, uint32_t nowMs);
++	bool online() const {
++		return m_online;
++	}
++	uint32_t errors() const {
++		return m_errors;
++	}
++
++private:
++	void disconnect();
++	static constexpr size_t MaxModules = 4;
++	Module* m_modules[MaxModules] = {};
++	size_t m_count = 0;
++	size_t m_next = 0;
++	Module* m_pendingModule = nullptr;
++	Module* m_sendingModule = nullptr;
++	wire::AppFrame m_pending = {};
++	wire::AppFrame m_sending = {};
++	bool m_hasPending = false;
++	bool m_online = false;
++	uint32_t m_errors = 0;
++	uint32_t m_pendingTime = 0;
++};
++
++bool validResponse(const wire::AppFrame& tx, const wire::AppFrame& rx);
++} // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/tests/CMakeLists.txt b/firmware/hw_layer/g0_extension/tests/CMakeLists.txt
+new file mode 100644
+index 0000000000..347b275a17
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/tests/CMakeLists.txt
+@@ -0,0 +1,12 @@
++cmake_minimum_required(VERSION 3.16)
++project(g0_tests LANGUAGES CXX)
++enable_testing()
++add_executable(g0_tests test.cpp ../link.cpp)
++target_compile_features(g0_tests PRIVATE cxx_std_17)
++target_compile_options(g0_tests PRIVATE -Wall -Wextra -Werror -UNDEBUG)
++option(G0_SANITIZE "Enable host sanitizers" OFF)
++if(G0_SANITIZE)
++  target_compile_options(g0_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
++  target_link_options(g0_tests PRIVATE -fsanitize=address,undefined)
++endif()
++add_test(NAME g0_tests COMMAND g0_tests)
+diff --git a/firmware/hw_layer/g0_extension/tests/test.cpp b/firmware/hw_layer/g0_extension/tests/test.cpp
+new file mode 100644
+index 0000000000..a4e6bcc0f2
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/tests/test.cpp
+@@ -0,0 +1,139 @@
++#include "../link.h"
++#include <cassert>
++#include <cstdio>
++
++using namespace g0;
++
++static wire::AppFrame reply(uint8_t command, uint8_t length) {
++	wire::AppFrame rx = {};
++	rx.responseHeader.command = command;
++	rx.responseHeader.payloadLength = length;
++	return rx;
++}
++
++struct TestModule : Module {
++	uint8_t tag = 0;
++	int responses = 0;
++	int disconnects = 0;
++	bool request(wire::AppFrame& tx, uint32_t) override {
++		tx.bytes[0] = wire::cmdReadAnalog;
++		tx.bytes[35] = tag;
++		return true;
++	}
++	void response(const wire::AppFrame&, const wire::AppFrame&, uint32_t) override {
++		responses++;
++	}
++	void disconnected() override {
++		disconnects++;
++	}
++};
++
++static void testLink() {
++	Link link;
++	TestModule module;
++	assert(link.attach(module));
++	assert(link.attach(module));
++	wire::AppFrame tx;
++	auto rx = reply(wire::cmdReadVersion, wire::versionPayloadLength);
++	rx.versionResponse.version = AppVersion;
++	link.prepare(tx, 0);
++	link.complete(rx, true, 0); // Initial slave frame is unsolicited.
++	assert(!link.online());
++	link.prepare(tx, 10);
++	link.complete(rx, true, 10);
++	assert(link.online());
++	link.prepare(tx, 20);
++	assert(tx.bytes[0] == wire::cmdReadAnalog);
++	link.complete(rx, true, 20); // Still the second version request's reply.
++	assert(module.responses == 0);
++	link.prepare(tx, 30);
++	link.complete(reply(wire::cmdReadAnalog, wire::analogPayloadLength), true, 30);
++	assert(module.responses == 1);
++	link.prepare(tx, 40);
++	link.complete(reply(wire::cmdNop, 0), true, 40);
++	assert(!link.online() && module.disconnects == 1 && link.errors() == 1);
++	link.prepare(tx, 50);
++	assert(tx.bytes[0] == wire::cmdReadVersion);
++	link.complete({}, false, 50);
++	assert(module.disconnects == 2);
++	link.prepare(tx, 60);
++	link.complete(rx, true, 60);
++	link.prepare(tx, 70);
++	rx.versionResponse.version = AppVersion - 1;
++	link.complete(rx, true, 70);
++	assert(!link.online());
++	rx.versionResponse.version = AppVersion;
++	link.prepare(tx, 80);
++	link.complete(rx, true, 80);
++	link.prepare(tx, 90);
++	link.complete(rx, true, 90);
++	assert(link.online());
++	TestModule others[4];
++	for (int i = 0; i < 3; i++) {
++		assert(link.attach(others[i]));
++	}
++	assert(!link.attach(others[3]));
++}
++
++static void testValidation() {
++	wire::AppFrame tx = {};
++	tx.indexedRequest = {wire::cmdReadOutput, 2};
++	auto rx = reply(wire::cmdReadOutput, wire::outputPayloadLength);
++	rx.outputResponse.output = 2;
++	assert(validResponse(tx, rx));
++	rx.outputResponse.output = 1;
++	assert(!validResponse(tx, rx));
++	rx.outputResponse.output = 2;
++	rx.responseHeader.payloadLength++;
++	assert(!validResponse(tx, rx));
++	rx.responseHeader.payloadLength--;
++	rx.responseHeader.status = wire::statusUpdateMode;
++	assert(!validResponse(tx, rx));
++	rx.responseHeader.status = wire::statusReady;
++	rx.responseHeader.result = wire::resultBusy;
++	assert(!validResponse(tx, rx));
++}
++
++static void testFairnessAndStall() {
++	Link link;
++	TestModule modules[3];
++	for (uint8_t i = 0; i < 3; i++) {
++		modules[i].tag = i;
++		assert(link.attach(modules[i]));
++	}
++	wire::AppFrame tx;
++	auto rx = reply(wire::cmdReadVersion, wire::versionPayloadLength);
++	rx.versionResponse.version = AppVersion;
++	link.prepare(tx, 0);
++	link.complete(rx, true, 0);
++	link.prepare(tx, 10);
++	link.complete(rx, true, 10);
++	for (uint32_t tick = 2; tick < 11; tick++) {
++		link.prepare(tx, tick * 10);
++		assert(tx.bytes[35] == (tick - 2) % 3);
++		link.complete(rx, true, tick * 10);
++		rx = reply(wire::cmdReadAnalog, wire::analogPayloadLength);
++	}
++	link.prepare(tx, 400);
++	link.complete(rx, true, 400);
++	assert(!link.online());
++	for (const auto& module : modules) {
++		assert(module.disconnects == 1);
++	}
++	Link idle;
++	idle.prepare(tx, 0);
++	idle.complete(reply(wire::cmdReadVersion, 4), true, 0);
++	rx = reply(wire::cmdReadVersion, 4);
++	rx.versionResponse.version = AppVersion;
++	idle.prepare(tx, 10);
++	idle.complete(rx, true, 10);
++	idle.prepare(tx, 20);
++	assert(tx.bytes[0] == wire::cmdReadVersion);
++}
++
++int main() {
++	testFairnessAndStall();
++	testLink();
++	testValidation();
++	std::puts("G0 protocol tests passed");
++}
