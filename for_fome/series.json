@@ -30,6 +30,16 @@
       "part": 6,
       "commit": "b2d3f5aabaa35ada75c36cfd5dadbf8b04f9dbc3",
       "title": "g0: add optional startup updater with image validation and readback"
+    },
+    {
+      "part": 6,
+      "commit": "3f0689702d42d2533f202c8b5ca6874e699ebe55",
+      "title": "g0: automatically build and bundle companion firmware in Atlas binaries"
     }
-  ]
+  ],
+  "published_updater_branch": {
+    "branch": "codex/g0-06-updater",
+    "base": "15aa40ba80aed1a196ef18f5898ce9fb52bbebff",
+    "tip": "7164cbba3b1a0e0b386af0972fb3297e6ed54e72"
+  }
 }

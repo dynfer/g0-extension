@@ -28,4 +28,26 @@ because LeakSanitizer cannot run under the execution environment's ptrace setup.
 Builds ran in a separate checkout. The user's `ps_idle` checkout, modified VS Code
 settings, and untracked extension directory were preserved. The six commits were
 imported into `/home/denes/fome-fw` as local branch `codex/g0-modular`; nothing was
-pushed or flashed.
+flashed. The six [PR branches](BRANCHES.md) have since been published to the fork.
+
+The automatic bundling follow-up on the updater branch also passed these checks:
+
+| Check | Result |
+| --- | --- |
+| Normal Atlas script without G0 flags or a prepared image header | Passed; builds the pinned companion and embeds it |
+| Full G0 image in packaged `fome.bin` | Verified all 12,304 bytes; ELF places `g0_image::data` in read-only flash |
+| Repeat normal build | Passed; G0 binary and image-header timestamps remain unchanged |
+| Clean build after deleting generated outputs and deinitializing the G0 submodule | Passed; restores pinned sources, rebuilds G0, and regenerates the embedded header |
+| Host protocol and image-generator tests | Passed; existing protocol groups plus five Python test cases |
+| G0-disabled and updater-disabled make paths | Passed with the companion source directory absent |
+
+This follow-up adds build dependencies and image generation; it does not change
+the runtime protocol or programming sequence. The full 749-test native result
+above is from the original integration validation.
+
+The fork updater branch had received upstream merge `15aa40ba80` during the work.
+The bundling change was reapplied on top as `7164cbba3b`, preserving that merge.
+A clean normal Atlas build on the resulting branch passed, and the complete G0
+image was again verified in the packaged binary. The exported seven-patch series
+and `codex/g0-modular` retain the original base; the G0 module sources match the
+updated PR branch.

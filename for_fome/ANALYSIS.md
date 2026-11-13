@@ -25,8 +25,8 @@ The branches contain different layers of this work:
 The new code retains the existing wire layout and board mapping while using
 fome-fw's current ADC and GPIO extension interfaces. Runtime communication,
 analog state, digital state, output scheduling, and ROM programming have separate
-source files. The updater is unnecessary for ordinary I/O support and has its own
-build option. Board pins and SPI register settings remain in the Atlas board file.
+source files. The updater has its own build option; the final Atlas build enables it by default
+and automatically builds and bundles a pinned companion firmware image. Board pins and SPI register settings remain in the Atlas board file.
 
 Findings that affect the implementation:
 

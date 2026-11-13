@@ -1,13 +1,16 @@
 The new fome-fw integration targets the local `upstream/master` revision
 `b3ae7a9aa0` and the version 8 extension protocol at `19f0c4c` in this repository.
 
-The implementation is in [modules](modules/), and the six ordered, mergeable
-commits are exported in [patches](patches/series). [series.json](series.json)
+The implementation is in [modules](modules/), and the seven ordered commits for six PR parts
+are exported in [patches](patches/series). [series.json](series.json)
 records the exact base and commit IDs. [ANALYSIS.md](ANALYSIS.md) explains the
 existing implementations and the remaining limitations.
 
-The same six commits are available as local branch `codex/g0-modular` in
+The complete integration is available as local branch `codex/g0-modular` in
 `/home/denes/fome-fw`. [VALIDATION.md](VALIDATION.md) records the build and test results.
+Separate [PR branches](BRANCHES.md) are published to the `dynfer/fome-fw` fork.
+The updater branch also preserves the newer upstream merge made on the fork;
+the seven exported patches retain the original base for staged integration.
 
 | Merge request | Scope |
 | --- | --- |
@@ -16,10 +19,10 @@ The same six commits are available as local branch `codex/g0-modular` in
 | 3 | Twelve ADC channels with stale-data handling and sensor filter recovery |
 | 4 | Four digital inputs using the existing GPIO interface |
 | 5 | Four queued lowside outputs and local 1..500 Hz PWM |
-| 6 | Optional startup firmware updater with image validation and flash readback |
+| 6 | Automatic G0 firmware bundling and startup updater with flash readback |
 
-The patches are cumulative; merge them in this order. Firmware support is disabled
-by default. The base already supplies ADC providers and the background SPI worker,
+The patches are cumulative; merge them in this order. Atlas enables G0 support
+and automatic image bundling by default; `G0_EXTENSION=no` disables both. The base already supplies ADC providers and the background SPI worker,
 so those frameworks do not need to be reintroduced. Parts 1..5 require no firmware
 image, extension submodule, Java UI changes, or firmware-loader code.
 
@@ -47,7 +50,7 @@ The normal runtime build is:
 
 ```sh
 cd /path/to/patched/fome-fw/firmware/config/boards/atlas
-G0_EXTENSION=yes bash ./compile_atlas.sh
+bash ./compile_atlas.sh
 ```
 
 SENT sensor registration and frequency-sensor integration are deferred. The
