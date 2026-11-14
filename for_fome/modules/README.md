@@ -1,122 +1,65 @@
-Atlas enables G0 expansion support and bundles its companion firmware by default.
-Set `G0_EXTENSION=no` for hardware without the expansion. The integration targets
-protocol version 9: 36-byte SPI frames with CRC16/CCITT-FALSE in the last
-two bytes. Firmware identity is independent of the protocol version. The I/O modules can also run with
-`G0_FIRMWARE_UPDATE=no`, which removes the companion image and its build dependency.
+G0 expansion support is split into six commits: protocol/link, SPI transport,
+ADC, digital inputs, outputs/PWM, and firmware bundling/updater. Each commit
+includes its tests and only depends on the preceding parts.
 
-The integration is split into six ordered parts:
+The link uses the shared protocol-9 header from dynfer/g0-extension: 36-byte frames,
+CRC16/CCITT-FALSE in bytes 34..35, and a response delayed by one exchange. It
+validates CRC, command, payload length, status, channel and protocol version before
+publishing data. Reconnect discards the old pipeline. Module and output scheduling
+rotate so changing outputs cannot starve sensor polls.
 
-| Part | Responsibility | Existing fome-fw interface |
-| --- | --- | --- |
-| 1 | Wire format, response validation, pipeline, reconnect, fair scheduling | Standalone C++ and host tests |
-| 2 | DMA buffers and background SPI transfers; optional Atlas wiring | `BackgroundSpiDevice` |
-| 3 | Twelve analog inputs; 250 ms expiry and recovery | `AdcProvider` |
-| 4 | Four digital inputs; acknowledged mode configuration | `GpioChip` |
-| 5 | Four static lowsides and local 1..500 Hz PWM | `GpioChip`, `SimplePwm` |
-| 6 | Automatic image bundling, startup firmware programming and readback | STM32 ROM bootloader |
+Only the 10 ms background SPI worker transfers data. `LockedModule` protects
+state callbacks and the adapters lock readers/writers; SPI never runs while the
+kernel is locked. On H7, DMA buffers live in noncached SRAM.
 
-```mermaid
-flowchart LR
-  Worker[Shared SPI worker] --> Link[Versioned pipeline]
-  Link --> ADC[Analog module]
-  Link --> Digital[Digital module]
-  Link --> Outputs[Output queue]
-  ADC --> Provider[AdcProvider]
-  Digital --> GPIO[GpioChip]
-  Outputs --> GPIO
-  Outputs --> PWM[SimplePwm setpoints]
-  Updater[Optional startup updater] --> SPI[SPI and dedicated BOOT / RESET pins]
-  Worker --> SPI
-```
+| Atlas connection | Pins / interface |
+| --- | --- |
+| SPI5 | PF7 SCK, PF8 MISO, PF9 MOSI, PF6 CS |
+| G0 control | PB14 RESET, PB15 BOOT |
+| ADC | `EFI_ADC_20`..`EFI_ADC_31`: G0 channels 0..9, 17, 18 |
+| Switch inputs | `G0_DIGITAL_1`..`G0_DIGITAL_4` |
+| Lowside outputs | `G0_OUT_1`..`G0_OUT_4`, static or local 1..500 Hz PWM |
 
-Only the worker accesses the link. The production adapters protect state with
-short critical sections; no SPI operation occurs in a critical section. Modules
-must be registered before starting the worker. The slave returns the preceding
-request's response, so the first unsolicited frame is discarded. A response must
-pass its CRC and match its command, exact payload length, status, result, and
-indexed channel.
-Version mismatches, invalid frames, and worker stalls trigger resynchronization.
-The scheduler rotates between modules and between output channels.
+ADC values are volts at the G0 pin; board divider calibration still applies.
+Unavailable or 250 ms old samples return NaN and invalidate subscribed sensors;
+filters are preloaded on recovery. Digital reads return false when unavailable.
+Digital mode changes are acknowledged before polling. Frequency snapshots are
+available internally; registering frequency sensors in fome-fw is separate work.
+SENT is unsupported.
 
-Atlas owns the board mapping: SPI5, PF7/PF8/PF9 for SCK/MISO/MOSI and PF6 for CS.
-The optional updater additionally owns PB14/PB15 for RESET/BOOT. Other boards can
-call `g0::start` with their own SPI configuration and register the modules they
-need; `service.cpp` contains no Atlas pin mapping. Do not enable this build option
-for another board without supplying its `initG0Extension` implementation.
+Outputs start off. Callers queue setpoints, and only a matching acknowledgement
+clears them; changes while an ACK is in flight stay pending. Setpoints refresh
+every second and after reconnect. `SimplePwm` supports duty, frequency and
+inversion, including Lua frequency changes. Deinitializing a pin turns it off.
+The companion preserves PWM cycles during duty updates and disables outputs after
+500 ms without a checksum-valid frame. These outputs are for asynchronous
+auxiliary loads: they cannot follow crank/cam timing through SPI.
 
-The twelve ADC slots are `EFI_ADC_20` through `EFI_ADC_31`, corresponding to G0 ADC
-channels 0..9, 17, 18, in that order. The provider returns volts at the G0 MCU pin;
-fome-fw's normal board divider calibration still applies. Digital pins are
-`G0_DIGITAL_1` through `G0_DIGITAL_4`, and outputs are `G0_OUT_1` through
-`G0_OUT_4`. These enum values occupy previously unused slots 215..222, without
-reusing protected GPIO identifiers. Connector names are present in the Atlas
-pin list; they require an extension-enabled firmware build to operate.
-
-Analog values return NaN until ready or after 250 ms without a valid sample.
-The ADC subscription path invalidates such readings and reinitializes its filter
-on recovery. Digital reads return false when unavailable, matching the existing
-boolean GPIO interface. All four digital inputs initially use ordinary digital
-mode. The standalone digital state supports frequency snapshots, but frequency
-sensors are not registered with fome-fw in this series. SENT is excluded until
-the extension decoder validates its checksum and frame length.
-
-Outputs start disabled. Callers change desired state without performing SPI I/O.
-An acknowledgement only clears a request if its channel, applied frequency, and
-duty match the sent state and no newer desired state superseded it. Outputs are
-refreshed every second and reasserted after reconnect. PWM frequency and
-duty can both change through `SimplePwm`, including Lua `setPwmFreq`; inversion is
-preserved. The G0 applies duty updates at cycle boundaries and disables all
-outputs after 500 ms without a checksum-valid request. Deinitializing
-the output pin disables the remote output. This interface is for asynchronous
-auxiliary loads: the 10 ms shared worker tick gives roughly 20..30 ms between
-sensor polls once configured, and remote edges cannot follow an ECU trigger.
-
-Build Atlas using its normal script:
+Build Atlas with its normal script:
 
 ```sh
 cd firmware/config/boards/atlas
 bash ./compile_atlas.sh
 ```
 
-The updater defaults to enabled whenever G0 support is enabled. Every normal
-Atlas build initializes the pinned `firmware/ext/g0_firmware` submodule, including
-its ChibiOS dependency, and builds it with fome-fw's selected ARM compiler.
-The build generates `firmware/generated/g0_firmware_image.h` from that binary and
-reads the firmware identity generated from the G0 sources, configuration, pinned
-ChibiOS revision, compiler version and build options. This header is
-included by the updater, so the complete image becomes immutable data in the ECU
-firmware's flash, just as the wideband image is bundled with its updater.
+Atlas enables the expansion and updater by default. The build initializes the
+pinned `firmware/ext/g0_firmware` submodule, builds it with fome-fw's ARM compiler,
+and generates `g0_firmware_image.h` containing the complete immutable image and
+build identity. Clean builds recreate it; unchanged inputs preserve timestamps.
+No prepared binary/header is needed. Update the submodule pin for a new release.
 
-The build uses the recorded submodule commits; it never updates a moving branch.
-G0 objects and binaries live in `firmware/build/g0_firmware`, outside the source
-submodule. After `make clean`, the next normal build recreates both the binary and
-the generated header. An unchanged image preserves the header's timestamp so it
-does not unnecessarily rebuild the updater. Generation replaces changed headers
-atomically and rejects invalid G071 vectors or images beyond 128 KiB.
+Before registering remote I/O, the updater compares protocol and image identity.
+If they differ, it enters ROM using BOOT/RESET, writes padded 256-byte blocks,
+reads every block back, resets and checks the identity again. Invalid vectors or
+images beyond G071 flash bounds are rejected before resetting hardware. Firmware
+identity is generated from the companion build inputs; it is independent of the
+wire protocol version. Updating protocol-8 firmware uses the same ROM path.
 
-To build the normal runtime without bundling or programming a companion image:
+`G0_FIRMWARE_UPDATE=no` builds runtime I/O without an image or updater.
+`G0_EXTENSION=no` disables the expansion. These flags also skip the companion
+build dependency. Other boards need their own `initG0Extension` wiring.
 
-```sh
-G0_FIRMWARE_UPDATE=no bash ./compile_atlas.sh
-```
-
-To disable the expansion entirely, use `G0_EXTENSION=no`. Both options skip the
-G0 image dependency; the ECU bootloader, other board configurations without G0,
-simulator, and native tests do not build the companion. For custom G0 source
-releases, update the pinned submodule commit; the build changes its firmware
-identity automatically.
-
-Programming runs before the runtime device and remote GPIOs are registered;
-it has no live console update command. It skips programming if the protocol and bundled firmware identity
-match, otherwise resets through BOOT into ROM, writes padded 256-byte blocks,
-reads every block back, resets to the application, and checks both versions.
-Older protocol-8 firmware is upgraded through the same ROM path.
-
-The byte-level updater follows [ST AN4286](https://www.st.com/resource/en/application_note/an4286-how-to-use-spi-protocol-in-bootloader-on-stm32-mcus-stmicroelectronics.pdf),
-including byte spacing, ACK handshakes, packet checksums, and readback. It requires
-working G071 ROM SPI boot support and BOOT option bytes configured for the board.
-
-Run the host protocol and image-generator suites with sanitizers:
+Run the standalone tests:
 
 ```sh
 cmake -S firmware/hw_layer/g0_extension/tests -B /tmp/g0-tests -DG0_SANITIZE=ON
@@ -124,24 +67,6 @@ cmake --build /tmp/g0-tests -j12
 ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/g0-tests --output-on-failure
 ```
 
-Seven suites cover protocol validation, version/pipeline/reconnect behavior,
-fair scheduling and stale in-flight replies, analog freshness and timestamp
-wraparound, digital configuration, output updates during in-flight ACKs, and
-scripted ROM programming including padding, readback corruption, NACK, and timeout.
-Five additional Python tests cover version extraction, unchanged-header timestamps,
-image replacement, invalid inputs, and disabled build dependencies. Leak detection
-is disabled in the example because LeakSanitizer cannot run under ptrace;
-AddressSanitizer and UndefinedBehaviorSanitizer remain enabled.
-
-The companion suite in `firmware/ext/g0_firmware/tests` compiles the actual slave
-sources against HAL fixtures. It covers PWM updates, startup levels, link-loss
-shutdown, corrupted commands, partial-transfer recovery, ADC errors/expiry, and
-all four GPIO edge capture channels, including timer rollover. The build identity
-has separate Python tests. Run both repositories' suites from the G0 checkout
-with `bash for_fome/test.sh`.
-
-Hardware verification is still required for SPI recovery timing, input interrupt
-latency at the intended signal rate, PWM resolution, BOOT option bytes, reset
-wiring and flash recovery. Frequency capture uses GPIO interrupts and a shared
-1 MHz timer because TIM14/16/17 lack the capture pair required by the ICU driver.
-SENT mode and reads return an error until a validated decoder is available.
+Physical SPI timing/recovery, input latency, PWM resolution, BOOT option bytes,
+reset wiring and interrupted programming still need bench verification. Nothing
+in the host tests establishes those hardware properties.

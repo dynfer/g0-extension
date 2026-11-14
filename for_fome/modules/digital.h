@@ -2,7 +2,7 @@
 #include "link.h"
 
 namespace g0 {
-// SENT is intentionally excluded: the current G0 decoder does not check CRCs.
+// The slave rejects SENT until a validated decoder is available.
 enum class InputMode : uint8_t {
 	Digital = 0,
 	Frequency = 1
@@ -14,13 +14,16 @@ public:
 		if (index >= wire::digitalInputCount || uint8_t(mode) > uint8_t(InputMode::Frequency)) {
 			return false;
 		}
-		m_modes[index] = mode;
-		m_ready = false;
+		if (m_modes[index] != mode) {
+			m_modes[index] = mode;
+			m_configured[index] = false;
+			m_ready = false;
+		}
 		return true;
 	}
 	bool request(wire::AppFrame& tx, uint32_t) override {
 		for (size_t i = 0; i < wire::digitalInputCount; i++) {
-			if (m_configured[i] && m_applied[i] == m_modes[i]) {
+			if (m_configured[i]) {
 				continue;
 			}
 			tx.setInputModeRequest = {wire::cmdSetInputMode, uint8_t(i + 1), uint8_t(m_modes[i])};
@@ -35,8 +38,8 @@ public:
 			if (index >= wire::digitalInputCount) {
 				return;
 			}
-			m_applied[index] = InputMode(rx.digitalResponse.mode);
-			m_configured[index] = rx.digitalResponse.mode == tx.setInputModeRequest.mode;
+			m_configured[index] = rx.digitalResponse.mode == tx.setInputModeRequest.mode &&
+								  rx.digitalResponse.mode == uint8_t(m_modes[index]);
 			return;
 		}
 		m_ready = false;
@@ -48,9 +51,7 @@ public:
 			if (input.mode != uint8_t(m_modes[i]) || input.dutyPermille > 1000 || (input.flags & ~3U)) {
 				return;
 			}
-		}
-		for (size_t i = 0; i < wire::digitalInputCount; i++) {
-			m_inputs[i] = rx.digitalAllResponse.inputs[i];
+			m_inputs[i] = input;
 		}
 		m_updated = nowMs;
 		m_ready = true;
@@ -71,10 +72,10 @@ public:
 
 private:
 	InputMode m_modes[wire::digitalInputCount] = {};
-	InputMode m_applied[wire::digitalInputCount] = {};
 	bool m_configured[wire::digitalInputCount] = {};
 	wire::DigitalAllState m_inputs[wire::digitalInputCount] = {};
 	uint32_t m_updated = 0;
 	bool m_ready = false;
 };
+void registerDigital();
 } // namespace g0

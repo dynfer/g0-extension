@@ -1,8 +1,6 @@
-0001-g0-add-versioned-pipelined-protocol-and-host-tests.patch
-0002-g0-add-opt-in-background-SPI-transport-and-Atlas-wir.patch
-0003-g0-add-external-ADC-provider-with-freshness-and-filt.patch
-0004-g0-add-digital-inputs-through-the-GPIO-abstraction.patch
-0005-g0-add-queued-lowsides-and-local-PWM-with-verified-a.patch
-0006-g0-add-optional-startup-updater-with-image-validatio.patch
-0007-g0-automatically-build-and-bundle-companion-firmware.patch
-0008-g0-validate-frames-and-bundle-identifiable-fail-safe.patch
+0001-g0-add-CRC-protected-protocol-and-pipelined-link.patch
+0002-g0-add-background-SPI-transport-and-Atlas-wiring.patch
+0003-g0-add-ADC-provider-with-stale-sample-handling.patch
+0004-g0-add-digital-GPIO-inputs-with-acknowledged-configu.patch
+0005-g0-add-lowside-GPIO-and-local-PWM-setpoints.patch
+0006-g0-build-and-bundle-companion-firmware-with-verified.patch

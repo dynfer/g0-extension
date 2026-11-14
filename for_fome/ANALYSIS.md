@@ -2,7 +2,9 @@ The extension is an STM32G071 companion MCU running its own ChibiOS firmware.
 It is an asynchronous I/O coprocessor for fome-fw, with a fixed-size SPI slave
 interface. The original comparison below used extension revision `19f0c4c` and fome-fw
 `upstream/master` at `b3ae7a9aa0`. The current audit fixes are described in
-[AUDIT_FIXES.md](AUDIT_FIXES.md) and require protocol 9 on both MCUs.
+[AUDIT_FIXES.md](AUDIT_FIXES.md) and require protocol 9 on both MCUs. The compact
+six-branch stack targets `upstream/master` at `e628773bd0`; its protocol, safety
+and updater fixes are included in their owning module commits.
 
 | Source | Behavior |
 | --- | --- |

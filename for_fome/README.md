@@ -1,62 +1,44 @@
-The modular fome-fw integration starts at `upstream/master` revision
-`b3ae7a9aa0`. The audit follow-up upgrades both ends to protocol 9 with CRCs,
-link-loss shutdown and automatic firmware identities; see [AUDIT_FIXES.md](AUDIT_FIXES.md).
+The compact fome-fw integration is a six-commit stack based on current
+`upstream/master` at `e628773bd0`. Every part uses protocol 9; audit fixes are
+included in the module that owns them.
 
-The implementation is in [modules](modules/), and the eight ordered commits for six PR parts
-are exported in [patches](patches/series). [series.json](series.json)
-records the exact base and commit IDs. [ANALYSIS.md](ANALYSIS.md) explains the
-existing implementations and the remaining limitations.
+[BRANCHES.md](BRANCHES.md) lists the published fork branches and review bases.
+[series.json](series.json) records the exact commits and pinned G0 source.
+The source mirror in [modules](modules/) matches the final branch, and
+[patches/series](patches/series) lists the six patches in merge order.
 
-The complete integration is available as local branch `codex/g0-modular` in
-`/home/denes/fome-fw`. [VALIDATION.md](VALIDATION.md) records the build and test results.
-Separate [PR branches](BRANCHES.md) are published to the `dynfer/fome-fw` fork.
-The updater branch also preserves the newer upstream merge made on the fork;
-the eight exported patches retain the original base for staged integration.
-
-| Merge request | Scope |
+| Part | Scope |
 | --- | --- |
-| 1 | Shared wire contract, pipeline, validation, reconnect, fair polling, host tests |
-| 2 | Background SPI transport and opt-in Atlas board wiring |
-| 3 | Twelve ADC channels with stale-data handling and sensor filter recovery |
-| 4 | Four digital inputs using the existing GPIO interface |
-| 5 | Four queued lowside outputs and local 1..500 Hz PWM |
-| 6 | Automatic G0 firmware bundling and startup updater with flash readback |
+| 1 | Shared wire contract, CRC validation, response pipeline and reconnect |
+| 2 | Background SPI worker and Atlas wiring |
+| 3 | Twelve ADC inputs, expiry and filter recovery |
+| 4 | Four digital inputs and acknowledged mode configuration |
+| 5 | Four lowsides, local PWM, inversion and Lua frequency changes |
+| 6 | Automatic G0 image build/bundling and verified startup programming |
 
-The patches are cumulative; merge them in this order. Atlas enables G0 support
-and automatic image bundling by default; `G0_EXTENSION=no` disables both. The base already supplies ADC providers and the background SPI worker,
-so those frameworks do not need to be reintroduced. Parts 1..5 require no firmware
-image, extension submodule, Java UI changes, or firmware-loader code. The final
-audit follow-up coordinates changes across these parts; use the complete series
-with the new slave firmware.
+Each branch contains its preceding parts. The I/O parts opt in with
+`G0_EXTENSION=yes`; the final updater part enables Atlas support by default.
+`G0_EXTENSION=no` disables it. `G0_FIRMWARE_UPDATE=no` keeps runtime I/O without
+building or programming the companion image.
 
-To apply the series in a separate fome-fw worktree:
+Apply the series in a fresh checkout of the recorded base:
 
 ```sh
-git -C /home/denes/fome-fw worktree add -b review/g0-modular /tmp/fome-g0-review upstream/master
-git -C /tmp/fome-g0-review am /home/denes/g0-extension/for_fome/patches/*.patch
+git am /home/denes/g0-extension/for_fome/patches/*.patch
 ```
 
-The patch base is recorded exactly; a newer upstream revision may need rebasing.
-The source copies in `modules/` correspond to
-`firmware/hw_layer/g0_extension/` after the complete patch series. Existing-file changes,
-connector definitions, and build wiring are included in the patches.
-
-Run the standalone host tests from this repository:
+Run both the fome-fw module tests and actual G0 source regressions:
 
 ```sh
 bash for_fome/test.sh
 ```
 
-The [module documentation](modules/README.md) covers Atlas pin mapping, APIs,
-build commands, the optional image generator, timing, and hardware verification.
-The normal runtime build is:
+Build Atlas normally from `firmware/config/boards/atlas` with
+`bash ./compile_atlas.sh`; no prepared G0 image header is needed.
+[VALIDATION.md](VALIDATION.md) records the checks.
 
-```sh
-cd /path/to/patched/fome-fw/firmware/config/boards/atlas
-bash ./compile_atlas.sh
-```
-
-SENT is rejected until a validated decoder exists. Registering frequency sensors
-with fome-fw remains a separate integration step. Outputs shut off after 500 ms
-without a checksum-valid request. Hardware timing and the physical updater path
-still need bench verification.
+The earlier branches remain available as historical snapshots. The compact
+stack replaces the older eight-patch series. [ANALYSIS.md](ANALYSIS.md) records
+the original branch comparison and [AUDIT_FIXES.md](AUDIT_FIXES.md) explains the
+slave safety fixes. Hardware timing and the physical ROM updater still need
+bench verification. SENT is unsupported.

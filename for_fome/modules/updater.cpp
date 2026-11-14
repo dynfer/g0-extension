@@ -39,8 +39,7 @@ bool versionMatches(SPIDriver& spi) {
 	appExchange(spi, wire::cmdNop);
 	wire::AppFrame request = {};
 	request.bytes[0] = wire::cmdReadVersion;
-	return validResponse(request, rx) && rx.versionResponse.protocolVersion == wire::protocolVersion &&
-		   rx.versionResponse.version == g0_image::version;
+	return validResponse(request, rx) && rx.versionResponse.version == g0_image::version;
 }
 
 class Transport final : public BootTransport {

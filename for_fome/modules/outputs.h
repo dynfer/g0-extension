@@ -9,9 +9,7 @@ public:
 			return false;
 		}
 		auto& value = m_values[index];
-		if (value.frequency != frequency || value.duty != duty) {
-			value.dirty = true;
-		}
+		value.dirty |= value.frequency != frequency || value.duty != duty;
 		value.frequency = frequency;
 		value.duty = duty;
 		return true;
@@ -23,11 +21,7 @@ public:
 			if (value.pending || (!value.dirty && uint32_t(nowMs - value.updated) < 1000)) {
 				continue;
 			}
-			if (value.frequency == 0 && value.duty == 0) {
-				tx.indexedRequest = {wire::cmdDisableOutput, uint8_t(index + 1)};
-			} else {
-				tx.setOutputRequest = {wire::cmdSetOutput, uint8_t(index + 1), value.frequency, value.duty};
-			}
+			tx.setOutputRequest = {wire::cmdSetOutput, uint8_t(index + 1), value.frequency, value.duty};
 			value.pending = true;
 			m_next = (index + 1) % wire::outputCount;
 			return true;
@@ -40,11 +34,10 @@ public:
 			return;
 		}
 		auto& value = m_values[index];
-		const uint32_t frequency = tx.bytes[0] == wire::cmdSetOutput ? tx.setOutputRequest.frequencyHz : 0;
-		const uint16_t duty = tx.bytes[0] == wire::cmdSetOutput ? tx.setOutputRequest.duty : 0;
+		const auto& sent = tx.setOutputRequest;
 		value.pending = false;
-		value.dirty = rx.outputResponse.frequencyHz != frequency || rx.outputResponse.duty != duty ||
-					  value.frequency != frequency || value.duty != duty;
+		value.dirty = rx.outputResponse.frequencyHz != sent.frequencyHz || rx.outputResponse.duty != sent.duty ||
+					  value.frequency != sent.frequencyHz || value.duty != sent.duty;
 		value.updated = nowMs;
 	}
 	void disconnected() override {

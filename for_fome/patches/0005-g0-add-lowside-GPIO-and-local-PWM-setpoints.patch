@@ -1,30 +1,41 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Codex <codex@openai.com>
-Date: Sat, 14 Nov 2026 00:02:24 +0100
-Subject: [PATCH 5/6] g0: add queued lowsides and local PWM with verified
- acknowledgements
+From 52aec6335fb4abe37b7257f32132e89f046019ea Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Sat, 14 Nov 2026 11:54:44 +0100
+Subject: [PATCH 5/6] g0: add lowside GPIO and local PWM setpoints
 
 ---
  firmware/CHANGELOG.md                         |  1 +
  .../boards/atlas/board_configuration.cpp      |  2 +
  .../boards/atlas/connectors/g0_outputs.yaml   | 16 ++++
- firmware/controllers/algo/rusefi_hw_enums.h   |  5 ++
+ firmware/controllers/algo/rusefi_hw_enums.h   |  5 +
  firmware/controllers/system/efi_gpio.cpp      |  2 +-
  firmware/controllers/system/efi_output.h      |  3 +
- .../system/timer/pwm_generator_logic.cpp      | 19 +++++
+ .../system/timer/pwm_generator_logic.cpp      | 29 ++++++
+ .../system/timer/pwm_generator_logic.h        |  1 +
+ firmware/hw_layer/g0_extension/README.md      |  6 ++
  firmware/hw_layer/g0_extension/g0.mk          |  5 +-
- .../hw_layer/g0_extension/output_gpio.cpp     | 80 +++++++++++++++++++
+ .../hw_layer/g0_extension/output_gpio.cpp     | 94 +++++++++++++++++++
  firmware/hw_layer/g0_extension/output_gpio.h  |  8 ++
- firmware/hw_layer/g0_extension/outputs.h      | 68 ++++++++++++++++
- firmware/hw_layer/g0_extension/tests/test.cpp | 34 ++++++++
- 12 files changed, 240 insertions(+), 3 deletions(-)
+ firmware/hw_layer/g0_extension/outputs.h      | 61 ++++++++++++
+ .../g0_extension/tests/CMakeLists.txt         |  3 +
+ .../tests/mocks/drivers/gpio/gpio_ext.h       | 15 +++
+ .../g0_extension/tests/mocks/mpu_util.h       |  5 +
+ .../hw_layer/g0_extension/tests/mocks/pch.h   | 38 ++++++++
+ firmware/hw_layer/g0_extension/tests/test.cpp | 35 +++++++
+ .../g0_extension/tests/test_output_gpio.cpp   | 46 +++++++++
+ firmware/hw_layer/ports/mpu_util.h            |  1 +
+ 20 files changed, 373 insertions(+), 3 deletions(-)
  create mode 100644 firmware/config/boards/atlas/connectors/g0_outputs.yaml
  create mode 100644 firmware/hw_layer/g0_extension/output_gpio.cpp
  create mode 100644 firmware/hw_layer/g0_extension/output_gpio.h
  create mode 100644 firmware/hw_layer/g0_extension/outputs.h
+ create mode 100644 firmware/hw_layer/g0_extension/tests/mocks/drivers/gpio/gpio_ext.h
+ create mode 100644 firmware/hw_layer/g0_extension/tests/mocks/mpu_util.h
+ create mode 100644 firmware/hw_layer/g0_extension/tests/mocks/pch.h
+ create mode 100644 firmware/hw_layer/g0_extension/tests/test_output_gpio.cpp
 
 diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
-index e823ab081a..2c61194279 100644
+index 318fa1c079..ea540fdf75 100644
 --- a/firmware/CHANGELOG.md
 +++ b/firmware/CHANGELOG.md
 @@ -37,6 +37,7 @@ or
@@ -34,27 +45,27 @@ index e823ab081a..2c61194279 100644
 + - Four asynchronous lowside outputs with local 1..500 Hz PWM on the G0 expansion.
   - SD card logs are now organized into `YYYY/MM/DD` folders when the real-time clock is set. If the clock is not set, logs are still written to the root of the card with a sequential name.
   - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
-  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
+  - Clutch position sensor: an analog clutch pedal sensor reading 0% (released) to 100% (on the floor), with configurable voltages, gauges and datalog channels.
 diff --git a/firmware/config/boards/atlas/board_configuration.cpp b/firmware/config/boards/atlas/board_configuration.cpp
-index e65241fdcb..36aafbf1f0 100644
+index 45559b41eb..fbd87ab393 100644
 --- a/firmware/config/boards/atlas/board_configuration.cpp
 +++ b/firmware/config/boards/atlas/board_configuration.cpp
-@@ -5,6 +5,7 @@
- #if EFI_G0_EXTENSION && !EFI_BOOTLOADER
+@@ -6,6 +6,7 @@
  #include "g0_extension/service.h"
  #include "g0_extension/analog.h"
+ #include "g0_extension/digital.h"
 +#include "g0_extension/output_gpio.h"
  #include "mpu_util.h"
  
  void initG0Extension() {
-@@ -23,6 +24,7 @@ void initG0Extension() {
- 			.cfg2 = 0};
+@@ -15,6 +16,7 @@ void initG0Extension() {
+ 	auto& spi = *getSpiDevice(SPI_DEVICE_5);
  	initSpiCs(&g0SpiConfig, Gpio::F6);
  	palSetPad(g0SpiConfig.ssport, g0SpiConfig.sspad);
 +	g0::registerOutputs();
  	g0::registerDigital();
  	g0::registerAnalog(EFI_ADC_20 - EFI_ADC_0);
- 	g0::start(*getSpiDevice(SPI_DEVICE_5), g0SpiConfig);
+ 	efiAssertVoid(ObdCode::CUSTOM_ERR_ASSERT, g0::start(spi, g0SpiConfig), "G0 SPI worker full");
 diff --git a/firmware/config/boards/atlas/connectors/g0_outputs.yaml b/firmware/config/boards/atlas/connectors/g0_outputs.yaml
 new file mode 100644
 index 0000000000..12df506fab
@@ -121,7 +132,7 @@ index fdf2439dcf..c102d0d4f6 100644
  	brain_pin_diag_e getDiag() const;
  
 diff --git a/firmware/controllers/system/timer/pwm_generator_logic.cpp b/firmware/controllers/system/timer/pwm_generator_logic.cpp
-index ffac1dd6f0..6ac895eb70 100644
+index ffac1dd6f0..d0481a4fe1 100644
 --- a/firmware/controllers/system/timer/pwm_generator_logic.cpp
 +++ b/firmware/controllers/system/timer/pwm_generator_logic.cpp
 @@ -9,6 +9,9 @@
@@ -134,7 +145,24 @@ index ffac1dd6f0..6ac895eb70 100644
  
  #if EFI_PROD_CODE
  #include "mpu_util.h"
-@@ -320,6 +323,22 @@ void startSimplePwm(SimplePwm* state, const char* msg, OutputPin* output, float
+@@ -114,6 +117,16 @@ static efitick_t getNextSwitchTimeNt(PwmConfig* state) {
+ 	return state->safe.startNt + timeToSwitchNt;
+ }
+ 
++void SimplePwm::setFrequency(float frequency) {
++#if EFI_PROD_CODE
++	if (hardPwm) {
++		hardPwm->setFrequency(frequency);
++		return;
++	}
++#endif
++	PwmConfig::setFrequency(frequency);
++}
++
+ void PwmConfig::setFrequency(float frequency) {
+ 	if (std::isnan(frequency)) {
+ 		// explicit code just to be sure
+@@ -320,6 +333,22 @@ void startSimplePwm(SimplePwm* state, const char* msg, OutputPin* output, float
  		return;
  	}
  
@@ -157,6 +185,35 @@ index ffac1dd6f0..6ac895eb70 100644
  	state->seq.setSwitchTime(0, dutyCycle);
  	state->seq.setSwitchTime(1, 1);
  	state->seq.setChannelState(0, 0, false);
+diff --git a/firmware/controllers/system/timer/pwm_generator_logic.h b/firmware/controllers/system/timer/pwm_generator_logic.h
+index e0c1237cad..09650a7705 100644
+--- a/firmware/controllers/system/timer/pwm_generator_logic.h
++++ b/firmware/controllers/system/timer/pwm_generator_logic.h
+@@ -113,6 +113,7 @@ public:
+ 	SimplePwm();
+ 	SimplePwm(const char* name);
+ 	void setSimplePwmDutyCycle(float dutyCycle) override;
++	void setFrequency(float frequency);
+ 	MultiChannelStateSequenceWithData<2> seq;
+ 	hardware_pwm* hardPwm = nullptr;
+ };
+diff --git a/firmware/hw_layer/g0_extension/README.md b/firmware/hw_layer/g0_extension/README.md
+index 3a4fedf72d..d5a45a55f3 100644
+--- a/firmware/hw_layer/g0_extension/README.md
++++ b/firmware/hw_layer/g0_extension/README.md
+@@ -14,6 +14,12 @@ Unavailable or 250 ms old samples invalidate sensors. Filters reload on recovery
+ G0_DIGITAL_1..G0_DIGITAL_4 use the GPIO interface. Configuration is acknowledged
+ before polling. Reads return false when unavailable. SENT is unsupported.
+ 
++G0_OUT_1..G0_OUT_4 queue static or local 1..500 Hz PWM setpoints, including
++inversion and Lua duty/frequency changes. ACKs verify the sent setpoint; newer
++changes stay pending. Outputs start off and refresh every second or on reconnect.
++The slave shuts outputs off after 500 ms without a valid request. Use these for
++asynchronous auxiliary loads; crank/cam timing cannot follow SPI polling.
++
+ Run standalone tests with sanitizers:
+ 
+ ```sh
 diff --git a/firmware/hw_layer/g0_extension/g0.mk b/firmware/hw_layer/g0_extension/g0.mk
 index 9c85809b51..aeb1949756 100644
 --- a/firmware/hw_layer/g0_extension/g0.mk
@@ -175,16 +232,16 @@ index 9c85809b51..aeb1949756 100644
  endif
 diff --git a/firmware/hw_layer/g0_extension/output_gpio.cpp b/firmware/hw_layer/g0_extension/output_gpio.cpp
 new file mode 100644
-index 0000000000..2e43fa3005
+index 0000000000..8f7978a1e5
 --- /dev/null
 +++ b/firmware/hw_layer/g0_extension/output_gpio.cpp
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,94 @@
 +#include "pch.h"
-+#include "outputs.h"
 +#include "output_gpio.h"
-+#include "service.h"
 +#include "drivers/gpio/gpio_ext.h"
 +#include "mpu_util.h"
++#include "outputs.h"
++#include "service.h"
 +#include <cmath>
 +
 +namespace g0 {
@@ -194,14 +251,28 @@ index 0000000000..2e43fa3005
 +public:
 +	size_t index = 0;
 +	uint32_t frequency = 0;
++	float duty = 0;
 +	bool active = false;
 +	bool inverted = false;
-+	void setDuty(float duty) override {
++	void setDuty(float value) override {
 +		chibios_rt::CriticalSectionLocker lock;
-+		if (!active || !std::isfinite(duty) || duty < 0 || duty > 1) {
++		if (!active || !std::isfinite(value) || value < 0 || value > 1) {
 +			return;
 +		}
++		duty = value;
 +		outputs.state.set(index, frequency, uint16_t((inverted ? 1 - duty : duty) * wire::outputDutyMax + 0.5f));
++	}
++	void setFrequency(float value) override {
++		chibios_rt::CriticalSectionLocker lock;
++		if (!active) {
++			return;
++		}
++		if (!std::isfinite(value) || value < 1 || value > 500) {
++			warning(ObdCode::CUSTOM_ERR_PWM_STATE_ASSERT, "G0 PWM range (1..500 Hz)");
++			return;
++		}
++		frequency = uint32_t(value + 0.5f);
++		setDuty(duty);
 +	}
 +};
 +Pwm pwms[wire::outputCount];
@@ -275,10 +346,10 @@ index 0000000000..f5d82442e0
 +} // namespace g0
 diff --git a/firmware/hw_layer/g0_extension/outputs.h b/firmware/hw_layer/g0_extension/outputs.h
 new file mode 100644
-index 0000000000..9ca1bf5f09
+index 0000000000..c5f481fb09
 --- /dev/null
 +++ b/firmware/hw_layer/g0_extension/outputs.h
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,61 @@
 +#pragma once
 +#include "link.h"
 +
@@ -290,9 +361,7 @@ index 0000000000..9ca1bf5f09
 +			return false;
 +		}
 +		auto& value = m_values[index];
-+		if (value.frequency != frequency || value.duty != duty) {
-+			value.dirty = true;
-+		}
++		value.dirty |= value.frequency != frequency || value.duty != duty;
 +		value.frequency = frequency;
 +		value.duty = duty;
 +		return true;
@@ -304,11 +373,7 @@ index 0000000000..9ca1bf5f09
 +			if (value.pending || (!value.dirty && uint32_t(nowMs - value.updated) < 1000)) {
 +				continue;
 +			}
-+			if (value.frequency == 0 && value.duty == 0) {
-+				tx.indexedRequest = {wire::cmdDisableOutput, uint8_t(index + 1)};
-+			} else {
-+				tx.setOutputRequest = {wire::cmdSetOutput, uint8_t(index + 1), value.frequency, value.duty};
-+			}
++			tx.setOutputRequest = {wire::cmdSetOutput, uint8_t(index + 1), value.frequency, value.duty};
 +			value.pending = true;
 +			m_next = (index + 1) % wire::outputCount;
 +			return true;
@@ -321,11 +386,10 @@ index 0000000000..9ca1bf5f09
 +			return;
 +		}
 +		auto& value = m_values[index];
-+		const uint32_t frequency = tx.bytes[0] == wire::cmdSetOutput ? tx.setOutputRequest.frequencyHz : 0;
-+		const uint16_t duty = tx.bytes[0] == wire::cmdSetOutput ? tx.setOutputRequest.duty : 0;
++		const auto& sent = tx.setOutputRequest;
 +		value.pending = false;
-+		value.dirty = rx.outputResponse.frequencyHz != frequency || rx.outputResponse.duty != duty ||
-+					  value.frequency != frequency || value.duty != duty;
++		value.dirty = rx.outputResponse.frequencyHz != sent.frequencyHz || rx.outputResponse.duty != sent.duty ||
++					  value.frequency != sent.frequencyHz || value.duty != sent.duty;
 +		value.updated = nowMs;
 +	}
 +	void disconnected() override {
@@ -347,8 +411,95 @@ index 0000000000..9ca1bf5f09
 +	size_t m_next = 0;
 +};
 +} // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/tests/CMakeLists.txt b/firmware/hw_layer/g0_extension/tests/CMakeLists.txt
+index b59bf1c4ef..4886073294 100644
+--- a/firmware/hw_layer/g0_extension/tests/CMakeLists.txt
++++ b/firmware/hw_layer/g0_extension/tests/CMakeLists.txt
+@@ -11,3 +11,6 @@ if(G0_SANITIZE)
+ endif()
+ add_executable(g0_tests test.cpp ../link.cpp)
+ add_test(NAME g0_tests COMMAND g0_tests)
++add_executable(g0_output_tests test_output_gpio.cpp ../link.cpp)
++target_include_directories(g0_output_tests PRIVATE mocks)
++add_test(NAME g0_output_tests COMMAND g0_output_tests)
+diff --git a/firmware/hw_layer/g0_extension/tests/mocks/drivers/gpio/gpio_ext.h b/firmware/hw_layer/g0_extension/tests/mocks/drivers/gpio/gpio_ext.h
+new file mode 100644
+index 0000000000..696467a27d
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/tests/mocks/drivers/gpio/gpio_ext.h
+@@ -0,0 +1,15 @@
++#pragma once
++struct GpioChip {
++	virtual int init() = 0;
++	virtual int setPadMode(size_t, iomode_t) {
++		return -1;
++	}
++	virtual int writePad(size_t, int) {
++		return -1;
++	}
++};
++inline GpioChip* testOutputChip = nullptr;
++inline int gpiochip_register(brain_pin_e, const char*, GpioChip& chip, size_t) {
++	testOutputChip = &chip;
++	return 0;
++}
+diff --git a/firmware/hw_layer/g0_extension/tests/mocks/mpu_util.h b/firmware/hw_layer/g0_extension/tests/mocks/mpu_util.h
+new file mode 100644
+index 0000000000..ba428b771c
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/tests/mocks/mpu_util.h
+@@ -0,0 +1,5 @@
++#pragma once
++struct hardware_pwm {
++	virtual void setDuty(float duty) = 0;
++	virtual void setFrequency(float) {}
++};
+diff --git a/firmware/hw_layer/g0_extension/tests/mocks/pch.h b/firmware/hw_layer/g0_extension/tests/mocks/pch.h
+new file mode 100644
+index 0000000000..35d70b590f
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/tests/mocks/pch.h
+@@ -0,0 +1,38 @@
++#pragma once
++#include <cassert>
++#include <cstdint>
++#include <cstddef>
++enum Gpio {
++	G0_OUT_1 = 219,
++	G0_OUT_2,
++	G0_OUT_3,
++	G0_OUT_4
++};
++using brain_pin_e = Gpio;
++using iomode_t = unsigned;
++struct SPIDriver {};
++struct SPIConfig {};
++namespace ObdCode {
++enum Code {
++	CUSTOM_ERR_ASSERT,
++	CUSTOM_ERR_PWM_STATE_ASSERT
++};
++} // namespace ObdCode
++inline unsigned testWarnings = 0;
++inline void warning(ObdCode::Code, const char*) {
++	++testWarnings;
++}
++#define efiAssertVoid(code, condition, text) assert(condition)
++constexpr unsigned PAL_STM32_MODE_MASK = 3, PAL_MODE_OUTPUT_PUSHPULL = 1;
++namespace chibios_rt {
++struct CriticalSectionLocker {
++	inline static unsigned depth = 0;
++	CriticalSectionLocker() {
++		++depth;
++	}
++	~CriticalSectionLocker() {
++		assert(depth);
++		--depth;
++	}
++};
++} // namespace chibios_rt
 diff --git a/firmware/hw_layer/g0_extension/tests/test.cpp b/firmware/hw_layer/g0_extension/tests/test.cpp
-index 97c3dff208..fd1b721595 100644
+index a31f45d97b..0bda6fa0eb 100644
 --- a/firmware/hw_layer/g0_extension/tests/test.cpp
 +++ b/firmware/hw_layer/g0_extension/tests/test.cpp
 @@ -1,6 +1,7 @@
@@ -359,8 +510,8 @@ index 97c3dff208..fd1b721595 100644
  #include <cassert>
  #include <cstdio>
  
-@@ -153,6 +154,38 @@ static void testDigital() {
- 	assert(!digital.setMode(0, InputMode(2)));
+@@ -255,6 +256,39 @@ static void testModeChangeDuringAck() {
+ 	assert(tx.setInputModeRequest.input == 2);
  }
  
 +static void testOutputs() {
@@ -372,7 +523,8 @@ index 97c3dff208..fd1b721595 100644
 +	// Acknowledge startup off commands.
 +	for (unsigned i = 0; i < wire::outputCount; i++) {
 +		assert(outputs.request(tx, 0));
-+		assert(tx.bytes[0] == wire::cmdDisableOutput);
++		assert(tx.bytes[0] == wire::cmdSetOutput);
++		assert(tx.setOutputRequest.frequencyHz == 0 && tx.setOutputRequest.duty == 0);
 +		outputs.response(tx, {}, 0);
 +	}
 +	assert(!outputs.request(tx, 10));
@@ -395,14 +547,80 @@ index 97c3dff208..fd1b721595 100644
 +	assert(outputs.request(tx, 70));
 +}
 +
- static void testFairnessAndStall() {
- 	Link link;
- 	TestModule modules[3];
-@@ -192,6 +225,7 @@ static void testFairnessAndStall() {
- 
  int main() {
- 	testFairnessAndStall();
-+	testOutputs();
- 	testDigital();
- 	testAnalog();
  	testLink();
+ 	testValidation();
+@@ -263,5 +297,6 @@ int main() {
+ 	testAnalog();
+ 	testDigital();
+ 	testModeChangeDuringAck();
++	testOutputs();
+ 	std::puts("G0 tests passed");
+ }
+diff --git a/firmware/hw_layer/g0_extension/tests/test_output_gpio.cpp b/firmware/hw_layer/g0_extension/tests/test_output_gpio.cpp
+new file mode 100644
+index 0000000000..a75b28320f
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/tests/test_output_gpio.cpp
+@@ -0,0 +1,46 @@
++#include "../output_gpio.cpp"
++#include <initializer_list>
++#include <limits>
++
++namespace g0 {
++Link& link() {
++	static Link instance;
++	return instance;
++}
++} // namespace g0
++
++int main() {
++	using namespace g0;
++	registerOutputs();
++	assert(!startPwm(Gpio::G0_OUT_1, 501, 0.5f, false));
++	auto* pwm = startPwm(Gpio::G0_OUT_1, 100, 0.25f, true);
++	assert(pwm);
++	pwm->setFrequency(200);
++	wire::AppFrame tx = {};
++	assert(outputs.state.request(tx, 0));
++	assert(tx.setOutputRequest.output == 1);
++	assert(tx.setOutputRequest.frequencyHz == 200);
++	assert(tx.setOutputRequest.duty == 7500);
++	pwm->setDuty(0.6f);
++	assert(pwms[0].duty == 0.6f && pwms[0].frequency == 200);
++	for (float invalid : {0.0f, 501.0f, std::numeric_limits<float>::quiet_NaN()}) {
++		pwm->setFrequency(invalid);
++		assert(pwms[0].frequency == 200);
++	}
++	assert(testWarnings == 3);
++	assert(testOutputChip->setPadMode(0, 0) == 0);
++	assert(!pwms[0].active);
++	pwm->setFrequency(300);
++	pwm->setDuty(1);
++	assert(!pwms[0].active && pwms[0].frequency == 200);
++	outputs.state.disconnected();
++	assert(outputs.state.request(tx, 10));
++	// The scheduler rotates; inspect the disabled channel after startup commands.
++	for (unsigned i = 0; tx.indexedRequest.index != 1 && i < wire::outputCount; i++) {
++		outputs.state.response(tx, {}, 10);
++		assert(outputs.state.request(tx, 10));
++	}
++	assert(tx.indexedRequest.index == 1 && tx.bytes[0] == wire::cmdSetOutput);
++	assert(tx.setOutputRequest.frequencyHz == 0 && tx.setOutputRequest.duty == 0);
++	assert(chibios_rt::CriticalSectionLocker::depth == 0);
++}
+diff --git a/firmware/hw_layer/ports/mpu_util.h b/firmware/hw_layer/ports/mpu_util.h
+index e535ba3db3..938929ebb1 100644
+--- a/firmware/hw_layer/ports/mpu_util.h
++++ b/firmware/hw_layer/ports/mpu_util.h
+@@ -62,6 +62,7 @@ extern SPIConfig mmc_ls_spicfg;
+ struct hardware_pwm {
+ 	static hardware_pwm* tryInitPin(const char* msg, brain_pin_e pin, float frequencyHz, float duty);
+ 	virtual void setDuty(float duty) = 0;
++	virtual void setFrequency(float) {}
+ };
+ 
+ // Brownout Reset
+-- 
+2.53.0
+

@@ -1,23 +1,24 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Codex <codex@openai.com>
-Date: Sat, 14 Nov 2026 00:02:24 +0100
-Subject: [PATCH 2/6] g0: add opt-in background SPI transport and Atlas wiring
+From 718fb0b34915f7c6d14aef86b853757067bbf6e8 Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Sat, 14 Nov 2026 11:44:34 +0100
+Subject: [PATCH 2/6] g0: add background SPI transport and Atlas wiring
 
 ---
- firmware/config/boards/atlas/board.mk         |  3 +
- .../boards/atlas/board_configuration.cpp      | 31 ++++++++++
- firmware/hw_layer/g0_extension/g0.mk          |  6 ++
- firmware/hw_layer/g0_extension/service.cpp    | 56 +++++++++++++++++++
- firmware/hw_layer/g0_extension/service.h      | 31 ++++++++++
+ firmware/config/boards/atlas/board.mk         |  3 ++
+ .../boards/atlas/board_configuration.cpp      | 22 ++++++++
+ firmware/hw_layer/g0_extension/README.md      |  4 ++
+ firmware/hw_layer/g0_extension/g0.mk          |  6 +++
+ firmware/hw_layer/g0_extension/service.cpp    | 51 +++++++++++++++++++
+ firmware/hw_layer/g0_extension/service.h      | 30 +++++++++++
  firmware/hw_layer/hardware.cpp                |  7 +++
  firmware/hw_layer/hw_layer.mk                 |  2 +
- 7 files changed, 136 insertions(+)
+ 8 files changed, 125 insertions(+)
  create mode 100644 firmware/hw_layer/g0_extension/g0.mk
  create mode 100644 firmware/hw_layer/g0_extension/service.cpp
  create mode 100644 firmware/hw_layer/g0_extension/service.h
 
 diff --git a/firmware/config/boards/atlas/board.mk b/firmware/config/boards/atlas/board.mk
-index 382f7ca585..5f962d66d1 100644
+index 382f7ca585..6aca6f2a9c 100644
 --- a/firmware/config/boards/atlas/board.mk
 +++ b/firmware/config/boards/atlas/board.mk
 @@ -28,3 +28,6 @@ USE_WIFI = yes
@@ -25,13 +26,13 @@ index 382f7ca585..5f962d66d1 100644
  
  SHORT_BOARD_NAME = atlas
 +
-+# Build only when the expansion board is fitted.
++# Enable when the expansion board is fitted.
 +G0_EXTENSION ?= no
 diff --git a/firmware/config/boards/atlas/board_configuration.cpp b/firmware/config/boards/atlas/board_configuration.cpp
-index bfe0719666..60e6983c08 100644
+index bfe0719666..c25f66fc42 100644
 --- a/firmware/config/boards/atlas/board_configuration.cpp
 +++ b/firmware/config/boards/atlas/board_configuration.cpp
-@@ -2,6 +2,30 @@
+@@ -2,6 +2,21 @@
  
  #include "adc_subscription.h"
  
@@ -40,29 +41,20 @@ index bfe0719666..60e6983c08 100644
 +#include "mpu_util.h"
 +
 +void initG0Extension() {
-+	static bool initialized = false;
-+	if (initialized) {
-+		return;
-+	}
-+	initialized = true;
 +	turnOnSpi(SPI_DEVICE_5);
-+	static SPIConfig g0SpiConfig = {
-+			.circular = false,
-+			.end_cb = nullptr,
-+			.ssport = nullptr,
-+			.sspad = 0,
-+			.cfg1 = 7 | SPI_CFG1_MBR_2 | SPI_CFG1_MBR_1 | SPI_CFG1_MBR_0,
-+			.cfg2 = 0};
++	SPIConfig g0SpiConfig = {};
++	g0SpiConfig.cfg1 = 7 | SPI_CFG1_MBR_2 | SPI_CFG1_MBR_1 | SPI_CFG1_MBR_0;
++	auto& spi = *getSpiDevice(SPI_DEVICE_5);
 +	initSpiCs(&g0SpiConfig, Gpio::F6);
 +	palSetPad(g0SpiConfig.ssport, g0SpiConfig.sspad);
-+	g0::start(*getSpiDevice(SPI_DEVICE_5), g0SpiConfig);
++	efiAssertVoid(ObdCode::CUSTOM_ERR_ASSERT, g0::start(spi, g0SpiConfig), "G0 SPI worker full");
 +}
 +#endif
 +
  #ifndef EFI_BOOTLOADER
  #include "functional_sensor.h"
  #include "linear_func.h"
-@@ -137,6 +161,13 @@ void setBoardConfigOverrides() {
+@@ -137,6 +152,13 @@ void setBoardConfigOverrides() {
  	engineConfiguration->spi4misoPin = Gpio::E5;
  	engineConfiguration->spi4mosiPin = Gpio::E6;
  
@@ -76,6 +68,21 @@ index bfe0719666..60e6983c08 100644
  	// Clear SPI SD card pins in case it's enabled from porting a Proteus tune
  	if (engineConfiguration->sdCardSpiDevice || isBrainPinValid(engineConfiguration->sdCardCsPin)) {
  		engineConfiguration->is_enabled_spi_3 = false;
+diff --git a/firmware/hw_layer/g0_extension/README.md b/firmware/hw_layer/g0_extension/README.md
+index 13458c55bf..593a1279f7 100644
+--- a/firmware/hw_layer/g0_extension/README.md
++++ b/firmware/hw_layer/g0_extension/README.md
+@@ -3,6 +3,10 @@ A reply belongs to the previous exchange. The link checks CRC, command, status,
+ payload size, channel and protocol version, then dispatches it to its module.
+ Modules rotate fairly; reconnect discards the old pipeline.
+ 
++Enable Atlas with `G0_EXTENSION=yes`. SPI5 uses PF7/PF8/PF9 and PF6 for CS.
++Only the 10 ms background worker transfers data. DMA buffers are noncached on H7.
++State locks cover module callbacks and readers/writers, never SPI transfers.
++
+ Run standalone tests with sanitizers:
+ 
+ ```sh
 diff --git a/firmware/hw_layer/g0_extension/g0.mk b/firmware/hw_layer/g0_extension/g0.mk
 new file mode 100644
 index 0000000000..55370e75e5
@@ -90,10 +97,10 @@ index 0000000000..55370e75e5
 +endif
 diff --git a/firmware/hw_layer/g0_extension/service.cpp b/firmware/hw_layer/g0_extension/service.cpp
 new file mode 100644
-index 0000000000..6e558df355
+index 0000000000..c301357833
 --- /dev/null
 +++ b/firmware/hw_layer/g0_extension/service.cpp
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,51 @@
 +#include "pch.h"
 +#include "service.h"
 +#include "spi_thread.h"
@@ -126,11 +133,10 @@ index 0000000000..6e558df355
 +		// This fome-fw ChibiOS HAL has a void synchronous spiExchange API.
 +		spiExchange(&spi, wire::appFrameSize, txBuffer.bytes, rxBuffer.bytes);
 +		spiUnselect(&spi);
-+		instance.complete(rxBuffer, true, nowMs());
++		instance.complete(txBuffer, rxBuffer, true, nowMs());
 +	}
 +};
 +Device device;
-+bool started = false;
 +} // namespace
 +
 +uint32_t nowMs() {
@@ -141,21 +147,17 @@ index 0000000000..6e558df355
 +}
 +
 +bool start(SPIDriver& driver, const SPIConfig& spiSettings) {
-+	if (started) {
-+		return true;
-+	}
 +	device.driver = &driver;
 +	device.spiConfig = spiSettings;
-+	started = registerBackgroundSpiDevice(device);
-+	return started;
++	return registerBackgroundSpiDevice(device);
 +}
 +} // namespace g0
 diff --git a/firmware/hw_layer/g0_extension/service.h b/firmware/hw_layer/g0_extension/service.h
 new file mode 100644
-index 0000000000..c2c101e2fc
+index 0000000000..6cef5fc959
 --- /dev/null
 +++ b/firmware/hw_layer/g0_extension/service.h
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,30 @@
 +#pragma once
 +
 +#include "link.h"
@@ -163,7 +165,6 @@ index 0000000000..c2c101e2fc
 +namespace g0 {
 +// Attach modules during board initialization, before start().
 +Link& link();
-+void registerDigital();
 +bool start(SPIDriver& driver, const SPIConfig& spiSettings);
 +uint32_t nowMs();
 +
@@ -222,3 +223,6 @@ index cc665d48d4..9c54fc4d61 100644
  -include $(PROJECT_DIR)/hw_layer/$(CPU_HWLAYER)/hw_ports.mk
 +
 +include $(PROJECT_DIR)/hw_layer/g0_extension/g0.mk
+-- 
+2.53.0
+

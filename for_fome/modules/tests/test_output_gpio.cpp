@@ -40,6 +40,7 @@ int main() {
 		outputs.state.response(tx, {}, 10);
 		assert(outputs.state.request(tx, 10));
 	}
-	assert(tx.indexedRequest.index == 1 && tx.bytes[0] == wire::cmdDisableOutput);
+	assert(tx.indexedRequest.index == 1 && tx.bytes[0] == wire::cmdSetOutput);
+	assert(tx.setOutputRequest.frequencyHz == 0 && tx.setOutputRequest.duty == 0);
 	assert(chibios_rt::CriticalSectionLocker::depth == 0);
 }
