@@ -15,4 +15,5 @@ struct OutputState {
 void outputInit(void);
 bool outputSet(uint8_t output, uint32_t frequencyHz, uint16_t duty);
 void outputDisable(uint8_t output);
+void outputCommunicationReceived(void);
 OutputState outputGetState(uint8_t output);

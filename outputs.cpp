@@ -18,6 +18,7 @@ class SoftwareOutputs;
 
 struct OutputRuntimeState {
     virtual_timer_t timer;
+    OutputState applied;
     bool highPhase;
     uint8_t outputIndex;
     SoftwareOutputs *owner;
@@ -28,12 +29,16 @@ public:
     void init()
     {
         chSysLock();
+        chVTObjectInit(&watchdog);
         for (uint8_t outputIndex = 0U; outputIndex < outputCount; outputIndex++) {
             states[outputIndex] = {0U, 0U};
             chVTObjectInit(&runtimeStates[outputIndex].timer);
             runtimeStates[outputIndex].highPhase = false;
             runtimeStates[outputIndex].outputIndex = outputIndex;
             runtimeStates[outputIndex].owner = this;
+            // Preload the latch before enabling the output driver.
+            palClearLine(getLine(outputIndex));
+            palSetLineMode(getLine(outputIndex), PAL_MODE_OUTPUT_PUSHPULL);
             configureOutputI(outputIndex);
         }
         chSysUnlock();
@@ -46,7 +51,7 @@ public:
         }
 
         if (duty > outputDutyMax) {
-            duty = outputDutyMax;
+            return false;
         }
 
         const uint8_t outputIndex = output - 1U;
@@ -54,11 +59,23 @@ public:
             frequencyHz == 0U ? 0U : std::clamp(frequencyHz, minFrequencyHz, maxFrequencyHz);
 
         chSysLock();
+        const OutputState previous = states[outputIndex];
         states[outputIndex] = {requestedFrequencyHz, duty};
-        configureOutputI(outputIndex);
+        // Keep the current cycle intact; duty changes take effect at its boundary.
+        if (!hasEdges(previous) || !hasEdges(states[outputIndex]) ||
+            previous.frequencyHz != requestedFrequencyHz) {
+            configureOutputI(outputIndex);
+        }
         chSysUnlock();
 
         return true;
+    }
+
+    void communicationReceived()
+    {
+        chSysLock();
+        chVTSetI(&watchdog, TIME_MS2I(500), watchdogCallback, this);
+        chSysUnlock();
     }
 
     void disable(uint8_t output)
@@ -89,6 +106,7 @@ public:
     }
 
 private:
+    virtual_timer_t watchdog;
     OutputState states[outputCount] = {};
     OutputRuntimeState runtimeStates[outputCount] = {};
 
@@ -154,11 +172,25 @@ private:
         runtime->owner->onTimerI(runtime->outputIndex);
     }
 
+    static void watchdogCallback(virtual_timer_t *, void *par)
+    {
+        auto *self = static_cast<SoftwareOutputs *>(par);
+        chSysLockFromISR();
+        for (uint8_t i = 0; i < outputCount; i++) {
+            self->states[i] = {0U, 0U};
+            self->configureOutputI(i);
+        }
+        chSysUnlockFromISR();
+    }
+
     void onTimerI(uint8_t outputIndex)
     {
         chSysLockFromISR();
-        const OutputState &state = states[outputIndex];
         OutputRuntimeState &runtime = runtimeStates[outputIndex];
+        if (!runtime.highPhase) {
+            runtime.applied = states[outputIndex];
+        }
+        const OutputState &state = runtime.applied;
 
         if (hasEdges(state)) {
             const ioline_t line = getLine(outputIndex);
@@ -180,7 +212,7 @@ private:
         const ioline_t line = getLine(outputIndex);
 
         chVTResetI(&runtime.timer);
-        palSetLineMode(line, PAL_MODE_OUTPUT_PUSHPULL);
+        runtime.applied = state;
 
         if (!hasEdges(state)) {
             runtime.highPhase = staticLevel(state);
@@ -215,6 +247,11 @@ bool outputSet(uint8_t output, uint32_t frequencyHz, uint16_t duty)
 void outputDisable(uint8_t output)
 {
     outputs.disable(output);
+}
+
+void outputCommunicationReceived(void)
+{
+    outputs.communicationReceived();
 }
 
 OutputState outputGetState(uint8_t output)

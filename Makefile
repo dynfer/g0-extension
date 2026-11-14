@@ -155,7 +155,7 @@ UDEFS =
 UADEFS =
 
 # List all user directories here
-UINCDIR =
+UINCDIR = $(BUILDDIR)
 
 # List the user directory to look for the libraries here
 ULIBDIR =
@@ -183,14 +183,22 @@ include $(RULESPATH)/rules.mk
 # Custom rules
 #
 
+PYTHON ?= python3
+G0_VERSION_HEADER := $(BUILDDIR)/g0_firmware_version.h
+.PHONY: g0-version-force
+g0-version-force:
+
+$(G0_VERSION_HEADER): g0-version-force
+	$(PYTHON) tools/firmware_version.py --root . --output "$@" --compiler "$(CC)" \
+		--options="$(OPT) $(COPT) $(CPPOPT) $(UDEFS) $(USE_LDOPT) $(USE_PROCESS_STACKSIZE) $(USE_EXCEPTIONS_STACKSIZE)"
+
+$(OBJDIR)/spi_app_protocol.o: $(G0_VERSION_HEADER)
+
 .PHONY: for_fome_image
 
-for_fome_image: build/$(PROJECT).bin
-	mkdir -p for_fome
-	xxd -i build/$(PROJECT).bin \
-		| sed 's/^unsigned/static const unsigned/' \
-		> for_fome/g0_firmware_image.h
-	printf 'Generated from %s\n' 'build/$(PROJECT).bin' > for_fome/readme.txt
+for_fome_image: $(BUILDDIR)/$(PROJECT).bin
+	$(PYTHON) for_fome/modules/make_image.py --input "$(BUILDDIR)/$(PROJECT).bin" \
+		--output for_fome/g0_firmware_image.h --version-header "$(G0_VERSION_HEADER)"
 
 #
 # Custom rules
