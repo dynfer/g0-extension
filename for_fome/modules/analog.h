@@ -19,8 +19,6 @@ public:
 			if (value.millivolts[i] > 3300) {
 				return;
 			}
-		}
-		for (size_t i = 0; i < wire::analogChannelCount; i++) {
 			m_millivolts[i] = value.millivolts[i];
 		}
 		m_updated = nowMs;

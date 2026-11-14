@@ -45,9 +45,10 @@ class ImageTests(unittest.TestCase):
         self.assertNotEqual(original, self.header.read_text())
         self.assertFalse(self.header.with_suffix(".h.tmp").exists())
 
-    def test_explicit_version(self):
-        self.generate("--version", "9")
-        self.assertTrue(self.header.exists())
+    def test_identity_is_independent_of_protocol(self):
+        self.source.write_text("#define G0_FIRMWARE_VERSION 9U\n")
+        self.generate("--version-header", str(self.source))
+        self.assertIn("version = 9;", self.header.read_text())
 
     def test_missing_ambiguous_or_unsupported_source_version(self):
         for text in ["", "#define G0_FIRMWARE_VERSION 0U", "#define G0_FIRMWARE_VERSION 0x100000000U",

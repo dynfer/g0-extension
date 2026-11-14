@@ -1,33 +1,27 @@
-The six integration branches are published to the `dynfer/fome-fw` fork and
-tracked locally in `/home/denes/fome-fw`.
+The compact integration is published as six cumulative branches on `dynfer/fome-fw`,
+based on `FOME-Tech/fome-fw:master` at `e628773bd0`. Each branch adds one
+module commit to the preceding part; all parts use protocol 9.
 
-| Part | Fork branch | Tip | Previous part / review base |
+| Part | Fork branch | Tip | Review base |
 | --- | --- | --- | --- |
-| 1 | [codex/g0-01-protocol](https://github.com/dynfer/fome-fw/tree/codex/g0-01-protocol) | `fd824ebbdf` | `upstream/master` at `b3ae7a9aa0` |
-| 2 | [codex/g0-02-spi-transport](https://github.com/dynfer/fome-fw/tree/codex/g0-02-spi-transport) | `f1785a8e5c` | `codex/g0-01-protocol` |
-| 3 | [codex/g0-03-adc](https://github.com/dynfer/fome-fw/tree/codex/g0-03-adc) | `94b9e7ffa5` | `codex/g0-02-spi-transport` |
-| 4 | [codex/g0-04-digital-inputs](https://github.com/dynfer/fome-fw/tree/codex/g0-04-digital-inputs) | `96da172a9c` | `codex/g0-03-adc` |
-| 5 | [codex/g0-05-outputs](https://github.com/dynfer/fome-fw/tree/codex/g0-05-outputs) | `743bfe056c` | `codex/g0-04-digital-inputs` |
-| 6 | [codex/g0-06-updater](https://github.com/dynfer/fome-fw/tree/codex/g0-06-updater) | `ae7793cccd` | `codex/g0-05-outputs` |
+| 1 | [codex/g0-v9-01-protocol](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-01-protocol) | `79a891adea` | `upstream/master` |
+| 2 | [codex/g0-v9-02-spi-transport](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-02-spi-transport) | `718fb0b349` | `codex/g0-v9-01-protocol` |
+| 3 | [codex/g0-v9-03-adc](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-03-adc) | `ea0e3babbf` | `codex/g0-v9-02-spi-transport` |
+| 4 | [codex/g0-v9-04-digital-inputs](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-04-digital-inputs) | `4cd04606e8` | `codex/g0-v9-03-adc` |
+| 5 | [codex/g0-v9-05-outputs](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-05-outputs) | `52aec6335f` | `codex/g0-v9-04-digital-inputs` |
+| 6 | [codex/g0-v9-06-updater](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-06-updater) | `0cb6472e53` | `codex/g0-v9-05-outputs` |
 
-Parts 1..5 each add one integration commit to the previous part. Part 6 includes
-the updater, automatic image bundling and the coordinated protocol-9 audit fixes, on top of the newer
-upstream merge already present in that fork branch. The branches are
-cumulative because the modules depend on earlier parts. Submit upstream PRs to
-`FOME-Tech/fome-fw:master` in this order; until earlier parts merge, later PRs
-against upstream master also include those prerequisites. For an incremental
-review before merging, compare a branch with the previous part in this table.
+The commits cover protocol/link, background SPI transport, ADC, digital inputs,
+outputs/PWM, and automatic firmware bundling/updating, respectively. Their fixes
+and tests are contained in the owning module; there is no audit follow-up to
+apply across the stack.
 
-The complete audited integration is also published as
-[codex/g0-safety-fixes](https://github.com/dynfer/fome-fw/tree/codex/g0-safety-fixes)
-at `ae7793cccd`. Its single follow-up commit is based on the previous updater tip
-`7164cbba3b`. The G0 companion sources are on
-[codex/g0-audit-fixes](https://github.com/dynfer/g0-extension/tree/codex/g0-audit-fixes);
-fome-fw pins code revision `5fdddd58c6`.
+For incremental review, compare each branch with the review base above. Submit
+upstream PRs in this order; a later branch compared against upstream master also
+includes its prerequisites until they merge. The final branch builds and bundles
+G0 source revision `5fdddd58c6` automatically using the existing ROM updater.
 
-The existing `codex/g0-modular` branch retains the complete six-part integration
-and audit fix on the original base, at `9992d7a852`, matching the eight exported
-patches. Parts 1..5 retain their original review snapshots; the complete new
-slave requires the coordinated audit follow-up.
-Publishing these branches did not switch the user's `ps_idle` checkout or alter
-its uncommitted files.
+The earlier `codex/g0-01-*` through `codex/g0-06-*`, `codex/g0-modular` and
+`codex/g0-safety-fixes` branches remain unchanged as historical snapshots. The
+compact branches replace the previous eight-patch export without force-pushing
+those branches. The user's `ps_idle` checkout and uncommitted files are preserved.

@@ -30,11 +30,10 @@ public:
 		// This fome-fw ChibiOS HAL has a void synchronous spiExchange API.
 		spiExchange(&spi, wire::appFrameSize, txBuffer.bytes, rxBuffer.bytes);
 		spiUnselect(&spi);
-		instance.complete(rxBuffer, true, nowMs());
+		instance.complete(txBuffer, rxBuffer, true, nowMs());
 	}
 };
 Device device;
-bool started = false;
 } // namespace
 
 uint32_t nowMs() {
@@ -45,12 +44,8 @@ Link& link() {
 }
 
 bool start(SPIDriver& driver, const SPIConfig& spiSettings) {
-	if (started) {
-		return true;
-	}
 	device.driver = &driver;
 	device.spiConfig = spiSettings;
-	started = registerBackgroundSpiDevice(device);
-	return started;
+	return registerBackgroundSpiDevice(device);
 }
 } // namespace g0

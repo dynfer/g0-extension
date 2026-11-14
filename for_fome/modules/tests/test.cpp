@@ -1,6 +1,6 @@
+#include "../link.h"
 #include "../analog.h"
 #include "../digital.h"
-#include "../link.h"
 #include "../outputs.h"
 #include <cassert>
 #include <cstdio>
@@ -45,38 +45,38 @@ static void testLink() {
 	auto rx = reply(wire::cmdReadVersion, wire::versionPayloadLength);
 	link.prepare(tx, 0);
 	assert(wire::validFrame(tx));
-	link.complete(rx, true, 0); // Initial slave frame is unsolicited.
+	link.complete(tx, rx, true, 0); // Initial slave frame is unsolicited.
 	assert(!link.online());
 	link.prepare(tx, 10);
-	link.complete(rx, true, 10);
+	link.complete(tx, rx, true, 10);
 	assert(link.online());
 	link.prepare(tx, 20);
 	assert(tx.bytes[0] == wire::cmdReadAnalog);
-	link.complete(rx, true, 20); // Still the second version request's reply.
+	link.complete(tx, rx, true, 20); // Still the second version request's reply.
 	assert(module.responses == 0);
 	link.prepare(tx, 30);
-	link.complete(reply(wire::cmdReadAnalog, wire::analogPayloadLength), true, 30);
+	link.complete(tx, reply(wire::cmdReadAnalog, wire::analogPayloadLength), true, 30);
 	assert(module.responses == 1);
 	link.prepare(tx, 40);
-	link.complete(reply(wire::cmdNop, 0), true, 40);
-	assert(!link.online() && module.disconnects == 1 && link.errors() == 1);
+	link.complete(tx, reply(wire::cmdNop, 0), true, 40);
+	assert(!link.online() && module.disconnects == 1);
 	link.prepare(tx, 50);
 	assert(tx.bytes[0] == wire::cmdReadVersion);
-	link.complete({}, false, 50);
+	link.complete(tx, {}, false, 50);
 	assert(module.disconnects == 2);
 	link.prepare(tx, 60);
-	link.complete(rx, true, 60);
+	link.complete(tx, rx, true, 60);
 	link.prepare(tx, 70);
 	rx.versionResponse.protocolVersion--;
 	wire::seal(rx);
-	link.complete(rx, true, 70);
+	link.complete(tx, rx, true, 70);
 	assert(!link.online());
 	rx.versionResponse.protocolVersion = wire::protocolVersion;
 	wire::seal(rx);
 	link.prepare(tx, 80);
-	link.complete(rx, true, 80);
+	link.complete(tx, rx, true, 80);
 	link.prepare(tx, 90);
-	link.complete(rx, true, 90);
+	link.complete(tx, rx, true, 90);
 	assert(link.online());
 	TestModule others[4];
 	for (int i = 0; i < 3; i++) {
@@ -87,8 +87,8 @@ static void testLink() {
 
 static void testValidation() {
 	wire::AppFrame tx = {};
-	tx.indexedRequest = {wire::cmdReadOutput, 2};
-	auto rx = reply(wire::cmdReadOutput, wire::outputPayloadLength);
+	tx.indexedRequest = {wire::cmdSetOutput, 2};
+	auto rx = reply(wire::cmdSetOutput, wire::outputPayloadLength);
 	rx.outputResponse.output = 2;
 	wire::seal(rx);
 	assert(validResponse(tx, rx));
@@ -112,6 +112,73 @@ static void testValidation() {
 	rx.responseHeader.result = wire::resultBusy;
 	wire::seal(rx);
 	assert(!validResponse(tx, rx));
+}
+
+static void testVersionAndIdle() {
+	wire::AppFrame tx = {};
+	tx.bytes[0] = wire::cmdReadVersion;
+	auto rx = reply(wire::cmdReadVersion, wire::versionPayloadLength);
+	assert(validResponse(tx, rx));
+	rx.versionResponse.protocolVersion--;
+	wire::seal(rx);
+	assert(!validResponse(tx, rx));
+	rx.versionResponse.protocolVersion = wire::protocolVersion;
+	rx.versionResponse.version = 0;
+	wire::seal(rx);
+	assert(!validResponse(tx, rx));
+
+	struct Idle : TestModule {
+		bool request(wire::AppFrame& request, uint32_t) override {
+			request.bytes[1] = 0xff;
+			return false;
+		}
+	} idle;
+	Link link;
+	assert(link.attach(idle));
+	rx = reply(wire::cmdReadVersion, wire::versionPayloadLength);
+	link.prepare(tx, 0);
+	link.complete(tx, rx, true, 0);
+	link.prepare(tx, 10);
+	link.complete(tx, rx, true, 10);
+	link.prepare(tx, 20);
+	assert(tx.bytes[0] == wire::cmdReadVersion && tx.bytes[1] == 0);
+	assert(wire::validFrame(tx));
+}
+
+static void testFairnessAndStall() {
+	Link link;
+	TestModule modules[3];
+	for (uint8_t i = 0; i < 3; i++) {
+		modules[i].tag = i;
+		assert(link.attach(modules[i]));
+	}
+	wire::AppFrame tx;
+	auto rx = reply(wire::cmdReadVersion, wire::versionPayloadLength);
+	link.prepare(tx, 0);
+	assert(wire::validFrame(tx));
+	link.complete(tx, rx, true, 0);
+	link.prepare(tx, 10);
+	link.complete(tx, rx, true, 10);
+	for (uint32_t tick = 2; tick < 11; tick++) {
+		link.prepare(tx, tick * 10);
+		assert(tx.bytes[33] == (tick - 2) % 3);
+		link.complete(tx, rx, true, tick * 10);
+		rx = reply(wire::cmdReadAnalog, wire::analogPayloadLength);
+	}
+	link.prepare(tx, 400);
+	link.complete(tx, rx, true, 400);
+	assert(!link.online());
+	for (const auto& module : modules) {
+		assert(module.disconnects == 1);
+	}
+	Link idle;
+	idle.prepare(tx, 0);
+	idle.complete(tx, reply(wire::cmdReadVersion, wire::versionPayloadLength), true, 0);
+	rx = reply(wire::cmdReadVersion, wire::versionPayloadLength);
+	idle.prepare(tx, 10);
+	idle.complete(tx, rx, true, 10);
+	idle.prepare(tx, 20);
+	assert(tx.bytes[0] == wire::cmdReadVersion);
 }
 
 static void testAnalog() {
@@ -171,6 +238,24 @@ static void testDigital() {
 	assert(!digital.setMode(0, InputMode(2)));
 }
 
+static void testModeChangeDuringAck() {
+	Digital digital;
+	wire::AppFrame tx = {};
+	assert(digital.setMode(0, InputMode::Frequency));
+	assert(digital.request(tx, 0));
+	assert(tx.setInputModeRequest.mode == 1);
+	assert(digital.setMode(0, InputMode::Digital));
+	auto rx = reply(wire::cmdSetInputMode, wire::digitalPayloadLength);
+	rx.digitalResponse.mode = 1;
+	digital.response(tx, rx, 10);
+	assert(digital.request(tx, 20));
+	assert(tx.setInputModeRequest.input == 1 && tx.setInputModeRequest.mode == 0);
+	rx.digitalResponse.mode = 0;
+	digital.response(tx, rx, 30);
+	digital.request(tx, 40);
+	assert(tx.setInputModeRequest.input == 2);
+}
+
 static void testOutputs() {
 	Outputs outputs;
 	wire::AppFrame tx = {};
@@ -180,7 +265,8 @@ static void testOutputs() {
 	// Acknowledge startup off commands.
 	for (unsigned i = 0; i < wire::outputCount; i++) {
 		assert(outputs.request(tx, 0));
-		assert(tx.bytes[0] == wire::cmdDisableOutput);
+		assert(tx.bytes[0] == wire::cmdSetOutput);
+		assert(tx.setOutputRequest.frequencyHz == 0 && tx.setOutputRequest.duty == 0);
 		outputs.response(tx, {}, 0);
 	}
 	assert(!outputs.request(tx, 10));
@@ -203,51 +289,17 @@ static void testOutputs() {
 	assert(outputs.request(tx, 70));
 }
 
-static void testFairnessAndStall() {
-	Link link;
-	TestModule modules[3];
-	for (uint8_t i = 0; i < 3; i++) {
-		modules[i].tag = i;
-		assert(link.attach(modules[i]));
-	}
-	wire::AppFrame tx;
-	auto rx = reply(wire::cmdReadVersion, wire::versionPayloadLength);
-	link.prepare(tx, 0);
-	assert(wire::validFrame(tx));
-	link.complete(rx, true, 0);
-	link.prepare(tx, 10);
-	link.complete(rx, true, 10);
-	for (uint32_t tick = 2; tick < 11; tick++) {
-		link.prepare(tx, tick * 10);
-		assert(tx.bytes[33] == (tick - 2) % 3);
-		link.complete(rx, true, tick * 10);
-		rx = reply(wire::cmdReadAnalog, wire::analogPayloadLength);
-	}
-	link.prepare(tx, 400);
-	link.complete(rx, true, 400);
-	assert(!link.online());
-	for (const auto& module : modules) {
-		assert(module.disconnects == 1);
-	}
-	Link idle;
-	idle.prepare(tx, 0);
-	idle.complete(reply(wire::cmdReadVersion, wire::versionPayloadLength), true, 0);
-	rx = reply(wire::cmdReadVersion, wire::versionPayloadLength);
-	idle.prepare(tx, 10);
-	idle.complete(rx, true, 10);
-	idle.prepare(tx, 20);
-	assert(tx.bytes[0] == wire::cmdReadVersion);
-}
-
 void testBootloader();
 
 int main() {
-	testFairnessAndStall();
-	testBootloader();
-	testOutputs();
-	testDigital();
-	testAnalog();
 	testLink();
 	testValidation();
-	std::puts("G0 protocol tests passed");
+	testVersionAndIdle();
+	testFairnessAndStall();
+	testAnalog();
+	testDigital();
+	testModeChangeDuringAck();
+	testOutputs();
+	testBootloader();
+	std::puts("G0 tests passed");
 }

@@ -5,7 +5,6 @@
 namespace g0 {
 // Attach modules during board initialization, before start().
 Link& link();
-void registerDigital();
 bool start(SPIDriver& driver, const SPIConfig& spiSettings);
 uint32_t nowMs();
 

@@ -1,51 +1,47 @@
 {
-  "base": "b3ae7a9aa05fad9c68d7b3e3717ae81678579d10",
+  "base": "e628773bd0a1fd51616be7ea59f6b031ee4eed8a",
   "commits": [
     {
       "part": 1,
-      "commit": "fd824ebbdfdf5966e8315e10322929fc18f222da",
-      "title": "g0: add versioned pipelined protocol and host tests"
+      "branch": "codex/g0-v9-01-protocol",
+      "commit": "79a891adeae6dc2dca5c411a73a68f50f0a387e1",
+      "title": "g0: add CRC-protected protocol and pipelined link"
     },
     {
       "part": 2,
-      "commit": "f1785a8e5c56915022e99185d2165580e404b3a0",
-      "title": "g0: add opt-in background SPI transport and Atlas wiring"
+      "branch": "codex/g0-v9-02-spi-transport",
+      "commit": "718fb0b34915f7c6d14aef86b853757067bbf6e8",
+      "title": "g0: add background SPI transport and Atlas wiring"
     },
     {
       "part": 3,
-      "commit": "94b9e7ffa56fddb0e47b32ae123912f056ac2ac4",
-      "title": "g0: add external ADC provider with freshness and filter recovery"
+      "branch": "codex/g0-v9-03-adc",
+      "commit": "ea0e3babbf8de69a73dc0dcfd4bfd669f900c384",
+      "title": "g0: add ADC provider with stale-sample handling"
     },
     {
       "part": 4,
-      "commit": "96da172a9c16ed0b5f208de44f01bf6d1b19df06",
-      "title": "g0: add digital inputs through the GPIO abstraction"
+      "branch": "codex/g0-v9-04-digital-inputs",
+      "commit": "4cd04606e856ded5fa9960f72bc6373347bbdaca",
+      "title": "g0: add digital GPIO inputs with acknowledged configuration"
     },
     {
       "part": 5,
-      "commit": "743bfe056c431e0ba19e82e383dbc0d57137eeeb",
-      "title": "g0: add queued lowsides and local PWM with verified acknowledgements"
+      "branch": "codex/g0-v9-05-outputs",
+      "commit": "52aec6335fb4abe37b7257f32132e89f046019ea",
+      "title": "g0: add lowside GPIO and local PWM setpoints"
     },
     {
       "part": 6,
-      "commit": "b2d3f5aabaa35ada75c36cfd5dadbf8b04f9dbc3",
-      "title": "g0: add optional startup updater with image validation and readback"
-    },
-    {
-      "part": 6,
-      "commit": "3f0689702d42d2533f202c8b5ca6874e699ebe55",
-      "title": "g0: automatically build and bundle companion firmware in Atlas binaries"
-    },
-    {
-      "part": 6,
-      "commit": "9992d7a852bf28adf45d500edccc63cf2e3fdcb0",
-      "title": "g0: validate frames and bundle identifiable fail-safe companion firmware"
+      "branch": "codex/g0-v9-06-updater",
+      "commit": "0cb6472e53b9f38f06a73dad5bd25185be627f1b",
+      "title": "g0: build and bundle companion firmware with verified startup updates"
     }
   ],
   "published_updater_branch": {
-    "branch": "codex/g0-06-updater",
-    "base": "15aa40ba80aed1a196ef18f5898ce9fb52bbebff",
-    "tip": "ae7793cccdb242579e868b5a65a72c0f902b2cf4"
+    "branch": "codex/g0-v9-06-updater",
+    "base": "52aec6335fb4abe37b7257f32132e89f046019ea",
+    "tip": "0cb6472e53b9f38f06a73dad5bd25185be627f1b"
   },
   "companion_revision": "5fdddd58c64ee41bbe68ac9801b7139ec0e3ebbc",
   "protocol_version": 9

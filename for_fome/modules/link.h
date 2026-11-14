@@ -20,13 +20,11 @@ struct Module {
 class Link {
 public:
 	bool attach(Module& module);
+	// prepare, exchange, then complete with the same TX buffer. RX belongs to the previous request.
 	void prepare(wire::AppFrame& tx, uint32_t nowMs);
-	void complete(const wire::AppFrame& rx, bool transferred, uint32_t nowMs);
+	void complete(const wire::AppFrame& tx, const wire::AppFrame& rx, bool transferred, uint32_t nowMs);
 	bool online() const {
 		return m_online;
-	}
-	uint32_t errors() const {
-		return m_errors;
 	}
 
 private:
@@ -38,10 +36,8 @@ private:
 	Module* m_pendingModule = nullptr;
 	Module* m_sendingModule = nullptr;
 	wire::AppFrame m_pending = {};
-	wire::AppFrame m_sending = {};
 	bool m_hasPending = false;
 	bool m_online = false;
-	uint32_t m_errors = 0;
 	uint32_t m_pendingTime = 0;
 };
 

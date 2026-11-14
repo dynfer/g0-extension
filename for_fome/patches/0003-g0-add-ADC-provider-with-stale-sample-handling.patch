@@ -1,25 +1,25 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Codex <codex@openai.com>
-Date: Sat, 14 Nov 2026 00:02:24 +0100
-Subject: [PATCH 3/6] g0: add external ADC provider with freshness and filter
- recovery
+From ea0e3babbf8de69a73dc0dcfd4bfd669f900c384 Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Sat, 14 Nov 2026 11:48:07 +0100
+Subject: [PATCH 3/6] g0: add ADC provider with stale-sample handling
 
 ---
  firmware/CHANGELOG.md                         |  1 +
  .../boards/atlas/board_configuration.cpp      |  2 +
  .../boards/atlas/connectors/g0_analog.yaml    | 48 +++++++++++++++++++
  firmware/hw_layer/adc/adc_subscription.cpp    |  7 +++
- firmware/hw_layer/g0_extension/analog.h       | 45 +++++++++++++++++
+ firmware/hw_layer/g0_extension/README.md      |  4 ++
+ firmware/hw_layer/g0_extension/analog.h       | 43 +++++++++++++++++
  .../hw_layer/g0_extension/analog_provider.cpp | 29 +++++++++++
  firmware/hw_layer/g0_extension/g0.mk          |  3 +-
  firmware/hw_layer/g0_extension/tests/test.cpp | 28 +++++++++++
- 8 files changed, 162 insertions(+), 1 deletion(-)
+ 9 files changed, 164 insertions(+), 1 deletion(-)
  create mode 100644 firmware/config/boards/atlas/connectors/g0_analog.yaml
  create mode 100644 firmware/hw_layer/g0_extension/analog.h
  create mode 100644 firmware/hw_layer/g0_extension/analog_provider.cpp
 
 diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
-index 64aaa7fd87..4a4df217a8 100644
+index 03873658c7..461c3718b8 100644
 --- a/firmware/CHANGELOG.md
 +++ b/firmware/CHANGELOG.md
 @@ -35,6 +35,7 @@ or
@@ -29,9 +29,9 @@ index 64aaa7fd87..4a4df217a8 100644
 + - Optional G0 expansion ADC support on Atlas (build with G0_EXTENSION=yes).
   - SD card logs are now organized into `YYYY/MM/DD` folders when the real-time clock is set. If the clock is not set, logs are still written to the root of the card with a sequential name.
   - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
-  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
+  - Clutch position sensor: an analog clutch pedal sensor reading 0% (released) to 100% (on the floor), with configurable voltages, gauges and datalog channels.
 diff --git a/firmware/config/boards/atlas/board_configuration.cpp b/firmware/config/boards/atlas/board_configuration.cpp
-index 60e6983c08..062fd0998b 100644
+index c25f66fc42..af8101c6f4 100644
 --- a/firmware/config/boards/atlas/board_configuration.cpp
 +++ b/firmware/config/boards/atlas/board_configuration.cpp
 @@ -4,6 +4,7 @@
@@ -42,12 +42,12 @@ index 60e6983c08..062fd0998b 100644
  #include "mpu_util.h"
  
  void initG0Extension() {
-@@ -22,6 +23,7 @@ void initG0Extension() {
- 			.cfg2 = 0};
+@@ -13,6 +14,7 @@ void initG0Extension() {
+ 	auto& spi = *getSpiDevice(SPI_DEVICE_5);
  	initSpiCs(&g0SpiConfig, Gpio::F6);
  	palSetPad(g0SpiConfig.ssport, g0SpiConfig.sspad);
 +	g0::registerAnalog(EFI_ADC_20 - EFI_ADC_0);
- 	g0::start(*getSpiDevice(SPI_DEVICE_5), g0SpiConfig);
+ 	efiAssertVoid(ObdCode::CUSTOM_ERR_ASSERT, g0::start(spi, g0SpiConfig), "G0 SPI worker full");
  }
  #endif
 diff --git a/firmware/config/boards/atlas/connectors/g0_analog.yaml b/firmware/config/boards/atlas/connectors/g0_analog.yaml
@@ -122,12 +122,27 @@ index b702f302a7..25feb108ae 100644
  		float sensorVolts = mcuVolts * entry.VoltsPerAdcVolt;
  
  		// On the very first update, preload the filter as if we've been
+diff --git a/firmware/hw_layer/g0_extension/README.md b/firmware/hw_layer/g0_extension/README.md
+index 593a1279f7..6941750f07 100644
+--- a/firmware/hw_layer/g0_extension/README.md
++++ b/firmware/hw_layer/g0_extension/README.md
+@@ -7,6 +7,10 @@ Enable Atlas with `G0_EXTENSION=yes`. SPI5 uses PF7/PF8/PF9 and PF6 for CS.
+ Only the 10 ms background worker transfers data. DMA buffers are noncached on H7.
+ State locks cover module callbacks and readers/writers, never SPI transfers.
+ 
++ADC inputs EFI_ADC_20..EFI_ADC_31 correspond to G0 channels 0..9, 17 and 18.
++Values are volts at the G0 pin; board divider calibration still applies.
++Unavailable or 250 ms old samples invalidate sensors. Filters reload on recovery.
++
+ Run standalone tests with sanitizers:
+ 
+ ```sh
 diff --git a/firmware/hw_layer/g0_extension/analog.h b/firmware/hw_layer/g0_extension/analog.h
 new file mode 100644
-index 0000000000..e9463fcc29
+index 0000000000..1a79202d7b
 --- /dev/null
 +++ b/firmware/hw_layer/g0_extension/analog.h
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,43 @@
 +#pragma once
 +#include "link.h"
 +#include <cmath>
@@ -149,8 +164,6 @@ index 0000000000..e9463fcc29
 +			if (value.millivolts[i] > 3300) {
 +				return;
 +			}
-+		}
-+		for (size_t i = 0; i < wire::analogChannelCount; i++) {
 +			m_millivolts[i] = value.millivolts[i];
 +		}
 +		m_updated = nowMs;
@@ -221,7 +234,7 @@ index 55370e75e5..208233030b 100644
 +	$(PROJECT_DIR)/hw_layer/g0_extension/analog_provider.cpp
  endif
 diff --git a/firmware/hw_layer/g0_extension/tests/test.cpp b/firmware/hw_layer/g0_extension/tests/test.cpp
-index a4e6bcc0f2..db0e5818a7 100644
+index 016808238f..1e4dcb1a5c 100644
 --- a/firmware/hw_layer/g0_extension/tests/test.cpp
 +++ b/firmware/hw_layer/g0_extension/tests/test.cpp
 @@ -1,4 +1,5 @@
@@ -230,8 +243,8 @@ index a4e6bcc0f2..db0e5818a7 100644
  #include <cassert>
  #include <cstdio>
  
-@@ -94,6 +95,32 @@ static void testValidation() {
- 	assert(!validResponse(tx, rx));
+@@ -178,10 +179,37 @@ static void testFairnessAndStall() {
+ 	assert(tx.bytes[0] == wire::cmdReadVersion);
  }
  
 +static void testAnalog() {
@@ -260,14 +273,14 @@ index a4e6bcc0f2..db0e5818a7 100644
 +	assert(std::isnan(analog.voltage(0, 220)));
 +}
 +
- static void testFairnessAndStall() {
- 	Link link;
- 	TestModule modules[3];
-@@ -133,6 +160,7 @@ static void testFairnessAndStall() {
- 
  int main() {
- 	testFairnessAndStall();
-+	testAnalog();
  	testLink();
  	testValidation();
- 	std::puts("G0 protocol tests passed");
+ 	testVersionAndIdle();
+ 	testFairnessAndStall();
++	testAnalog();
+ 	std::puts("G0 tests passed");
+ }
+-- 
+2.53.0
+

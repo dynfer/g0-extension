@@ -1,5 +1,5 @@
 The audit fixes update the slave and fome-fw together to protocol 9. Apply the
-complete series or use the updated updater branch; protocol-8 hosts cannot drive
+complete compact six-part series or use its updater branch; protocol-8 hosts cannot drive
 the new slave. The startup updater installs it through the existing BOOT/RESET
 and ROM bootloader path.
 
@@ -18,6 +18,11 @@ and ROM bootloader path.
 | SENT decoder accepts invalid frames | Reject SENT mode and reads until a validated decoder exists | Mode and command rejection |
 | Tests exercise only host models | Compile the actual slave sources and production output adapter with small HAL fixtures | AddressSanitizer and UndefinedBehaviorSanitizer |
 | Unused capture/SENT queues consume RAM and drop entries | Delete the queues, batch APIs, decoder and worker | Remaining production callers compile in the firmware builds |
+
+The compact fome-fw stack retains these safeguards, uses one output-set command
+for both off and active outputs, and validates protocol compatibility in the
+shared response checker. Its six branches contain each fix in the owning module;
+there is no separate cross-module audit patch.
 
 The firmware identity covers application sources/headers, board/configuration
 files, Makefile, generator, protocol, pinned ChibiOS revision, compiler version
