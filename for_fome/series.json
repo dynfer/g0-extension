@@ -36,13 +36,20 @@
       "branch": "codex/g0-v9-06-updater",
       "commit": "0cb6472e53b9f38f06a73dad5bd25185be627f1b",
       "title": "g0: build and bundle companion firmware with verified startup updates"
+    },
+    {
+      "part": 6,
+      "branch": "codex/g0-v9-06-updater",
+      "commit": "e37de65226d562a2e2d42343cf8c648736ac9b76",
+      "title": "g0: provision BOOT0 option bytes before first firmware upload"
     }
   ],
   "published_updater_branch": {
     "branch": "codex/g0-v9-06-updater",
     "base": "52aec6335fb4abe37b7257f32132e89f046019ea",
-    "tip": "0cb6472e53b9f38f06a73dad5bd25185be627f1b"
+    "tip": "e37de65226d562a2e2d42343cf8c648736ac9b76"
   },
   "companion_revision": "5fdddd58c64ee41bbe68ac9801b7139ec0e3ebbc",
-  "protocol_version": 9
+  "protocol_version": 9,
+  "provisioning_snapshot_branch": "codex/g0-option-provisioning"
 }

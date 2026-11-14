@@ -1,6 +1,7 @@
-Validated the compact stack on 2026-11-14, based on `upstream/master`
+Validated the original compact stack on 2026-11-14, based on `upstream/master`
 `e628773bd0`. Its six commits and branch names are recorded in
-[series.json](series.json); the final updater tip is `0cb6472e53`.
+[series.json](series.json); its updater tip was `0cb6472e53` before the provisioning
+follow-up at `e37de65226`.
 
 | Check | Result |
 | --- | --- |
@@ -26,7 +27,7 @@ The runtime prefixes (2..5) were built with `G0_EXTENSION=yes` and
 prefix used Atlas defaults and automatically built its pinned G0 source
 `5fdddd58c6`. The companion source/protocol were unchanged by this refactor.
 
-The module directory's production C++/headers/make/Python code shrank from
+Before the provisioning follow-up, the module directory's production C++/headers/make/Python code shrank from
 1150 to 1101 lines, excluding tests and documentation. The refactor removes
 an extra frame copy, unused counters, duplicate mode state, unused response
 cases and a separate off-command path. Framework registration deduplication
@@ -38,6 +39,25 @@ Java 21 output in a task-specific Gradle cache. Leak detection was disabled for
 this ptrace environment; AddressSanitizer and UndefinedBehaviorSanitizer remained
 enabled. Builds ran outside the user's checkout. Existing branches, uncommitted
 VS Code settings and the untracked companion directory were preserved.
+
+The factory-provisioning follow-up was validated on 2026-11-14:
+
+| Check | Result |
+| --- | --- |
+| Module tests | All four CTest groups passed with AddressSanitizer and UndefinedBehaviorSanitizer; Python image tests passed |
+| Option provisioning | Factory and already configured options, preserved non-default fields, invalid complements, RDP, nBOOT1, NRST mode, BOOT_LOCK, unstable reads and failed readback covered |
+| ROM reconnect | Already synchronized ROM, wrong device ID, missing final option ACK and bounded connection timeouts covered |
+| Production updater | Factory first flash without any NRST pulse, matching app, older app, invalid options and absent device covered with HAL mocks |
+| Actual G0 slave and identity regressions | Passed; companion source and pin unchanged |
+| Clean Atlas build | Bootloader and application passed using the normal board script |
+| Compiled startup GPIO settings | Both OpenBLT and the main application set GPIOB PUPDR to `0x9aaaaaaa`, keeping PB14/NRST an input with pull-up |
+| Bundled image | All 12,060 bytes occur exactly once in packaged `fome.bin`; readonly ELF symbol at `0x080d60d0`; identity `0x722cede0` |
+| Exported seven patches | Applied from the recorded upstream base with `git am --whitespace=error`; final tree matches the provisioning commit |
+| Module mirror | All 33 files match the final fome-fw module |
+
+The full 770-test native suite result above belongs to the original compact
+stack; it was not rerun for this hardware updater follow-up. Generated files
+were excluded from the follow-up commit as well.
 
 Hardware timing, electrical levels, BOOT option bytes and physical/interrupted
 ROM programming were not tested. Nothing was flashed. SENT remains unsupported.

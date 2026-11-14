@@ -1,0 +1,993 @@
+From e37de65226d562a2e2d42343cf8c648736ac9b76 Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Sat, 14 Nov 2026 13:00:54 +0100
+Subject: [PATCH] g0: provision BOOT0 option bytes before first firmware upload
+
+Preserve the factory ROM session and enable nBOOT_SEL through its SPI loader before erasing main flash. Validate the G071 identity, option complements and recovery settings; retain every other option byte and require complete readback after reconnect.
+
+Keep Atlas NRST pulled up through both firmware stages and use ROM Go for first startup. Cover provisioning, existing applications, rejected options, missing ACKs and transport cleanup with sanitizer tests.
+---
+ firmware/CHANGELOG.md                         |   1 +
+ firmware/config/boards/atlas/board.mk         |   4 +
+ firmware/hw_layer/g0_extension/README.md      |  45 ++++-
+ firmware/hw_layer/g0_extension/bootloader.cpp | 103 +++++++++--
+ firmware/hw_layer/g0_extension/bootloader.h   |  16 +-
+ .../g0_extension/tests/CMakeLists.txt         |   3 +
+ .../g0_extension/tests/bootloader_fixture.h   | 148 +++++++++++++++
+ .../g0_extension/tests/test_bootloader.cpp    | 175 +++++++++---------
+ .../g0_extension/tests/test_updater.cpp       | 125 +++++++++++++
+ .../tests/updater_mocks/g0_firmware_image.h   |   5 +
+ .../tests/updater_mocks/mpu_util.h            |   2 +
+ .../g0_extension/tests/updater_mocks/pch.h    |  61 ++++++
+ firmware/hw_layer/g0_extension/updater.cpp    |  40 +++-
+ .../hw_layer/ports/stm32/stm32h7/cfg/board.h  |   5 +
+ 14 files changed, 608 insertions(+), 125 deletions(-)
+ create mode 100644 firmware/hw_layer/g0_extension/tests/bootloader_fixture.h
+ create mode 100644 firmware/hw_layer/g0_extension/tests/test_updater.cpp
+ create mode 100644 firmware/hw_layer/g0_extension/tests/updater_mocks/g0_firmware_image.h
+ create mode 100644 firmware/hw_layer/g0_extension/tests/updater_mocks/mpu_util.h
+ create mode 100644 firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h
+
+diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
+index 76c10d8324..5815a0abee 100644
+--- a/firmware/CHANGELOG.md
++++ b/firmware/CHANGELOG.md
+@@ -35,6 +35,7 @@ or
+  - MAF trim is split out as its own table, rather than sharing the VE table. Most setups should have this table set to all 100, but if yours isn't, just copy values over from the VE table.
+ 
+ ### Added
++ - Factory-blank G071 expansion modules can be provisioned over SPI: the updater enables BOOT0 pin selection while preserving the remaining option bytes.
+  - Optional G0 expansion ADC support on Atlas (build with G0_EXTENSION=yes).
+  - Four digital switch inputs on the optional G0 expansion.
+  - Four asynchronous lowside outputs with local 1..500 Hz PWM on the G0 expansion.
+diff --git a/firmware/config/boards/atlas/board.mk b/firmware/config/boards/atlas/board.mk
+index 3e7360f714..0ab2c93f0b 100644
+--- a/firmware/config/boards/atlas/board.mk
++++ b/firmware/config/boards/atlas/board.mk
+@@ -32,3 +32,7 @@ SHORT_BOARD_NAME = atlas
+ # Atlas bundles and manages its G0 companion by default.
+ # Set G0_EXTENSION=no for hardware without the expansion.
+ G0_EXTENSION ?= yes
++
++ifeq ($(G0_EXTENSION),yes)
++DDEFS += -DATLAS_G0_BOOT_CONTROL=TRUE
++endif
+diff --git a/firmware/hw_layer/g0_extension/README.md b/firmware/hw_layer/g0_extension/README.md
+index 86803702dc..aaabbf64f2 100644
+--- a/firmware/hw_layer/g0_extension/README.md
++++ b/firmware/hw_layer/g0_extension/README.md
+@@ -1,6 +1,7 @@
+-G0 expansion support is split into six commits: protocol/link, SPI transport,
+-ADC, digital inputs, outputs/PWM, and firmware bundling/updater. Each commit
+-includes its tests and only depends on the preceding parts.
++G0 expansion support is split into six modules: protocol/link, SPI transport,
++ADC, digital inputs, outputs/PWM, and firmware bundling/updater. Each part
++includes its tests and only depends on the preceding parts. The updater branch
++also contains the factory-provisioning follow-up.
+ 
+ The link uses the shared protocol-9 header from dynfer/g0-extension: 36-byte frames,
+ CRC16/CCITT-FALSE in bytes 34..35, and a response delayed by one exchange. It
+@@ -48,12 +49,38 @@ and generates `g0_firmware_image.h` containing the complete immutable image and
+ build identity. Clean builds recreate it; unchanged inputs preserve timestamps.
+ No prepared binary/header is needed. Update the submodule pin for a new release.
+ 
+-Before registering remote I/O, the updater compares protocol and image identity.
+-If they differ, it enters ROM using BOOT/RESET, writes padded 256-byte blocks,
+-reads every block back, resets and checks the identity again. Invalid vectors or
+-images beyond G071 flash bounds are rejected before resetting hardware. Firmware
+-identity is generated from the companion build inputs; it is independent of the
+-wire protocol version. Updating protocol-8 firmware uses the same ROM path.
++Before registering remote I/O, the updater first probes an existing G071 ROM
++session without pulsing NRST. This preserves factory-blank entry on ROM versions
++that clear the EMPTY flag during startup. RESET and BOOT output latches are
++preloaded high before enabling their GPIO drivers. Atlas also keeps PB14/NRST
++pulled up during both ECU bootloader and main-firmware GPIO initialization. A running application follows
++the normal reset/version-check path; a matching image skips programming.
++
++Before erasing main flash, the loader confirms device ID 0x0460, reads the full
++128-byte option block twice, and validates its option/complement pairs. It
++requires RDP level 0, nBOOT1=1, BOOT_LOCK=0 and an NRST input mode. If nBOOT_SEL is
++set, it clears only that bit and updates its inverse copy, preserving all other
++bytes. An already enabled BOOT0 pin causes no option write. The loader reconnects
++after the write and verifies the complete option block; a missing final ACK is
++accepted only when the readback proves the intended configuration was stored.
++
++It then programs padded 256-byte blocks and reads every block back. BOOT0 is
++lowered before the ROM Go command starts the application, avoiding dependence on
++the latched EMPTY flag. The application protocol and image identity must match
++before runtime I/O is registered. Invalid vectors or images beyond G071 flash
++bounds are rejected before changing hardware. Firmware identity is generated
++from companion build inputs independently of the wire protocol version.
++
++This first-boot path needs a live ROM session from power-on. A G0 that already
++lost that session while BOOT0 selection was disabled may need a full power cycle;
++pulsing NRST cannot recreate the empty-check condition on affected ROMs. An
++already programmed chip with BOOT0 disabled still needs a cooperating application
++or debug access to enter ROM.
++
++The option layout and boot sequence follow
++[RM0444](https://www.stmcu.jp/wp/wp-content/uploads/2018/12/RM0444_Rev3.pdf),
++[AN2606 section 48.3.1](https://www.st.com/resource/en/application_note/an2606-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf#page=264)
++and [AN4286](https://www.st.com/resource/en/application_note/an4286-spi-protocol-used-in-the-stm32-bootloader-stmicroelectronics.pdf).
+ 
+ `G0_FIRMWARE_UPDATE=no` builds runtime I/O without an image or updater.
+ `G0_EXTENSION=no` disables the expansion. These flags also skip the companion
+diff --git a/firmware/hw_layer/g0_extension/bootloader.cpp b/firmware/hw_layer/g0_extension/bootloader.cpp
+index c066a8acfe..000959aef7 100644
+--- a/firmware/hw_layer/g0_extension/bootloader.cpp
++++ b/firmware/hw_layer/g0_extension/bootloader.cpp
+@@ -42,10 +42,28 @@ bool Bootloader::ack(uint32_t timeoutMs) {
+ 	return false;
+ }
+ 
+-bool Bootloader::command(uint8_t command) {
++bool Bootloader::command(uint8_t command, uint32_t timeoutMs) {
+ 	const uint8_t packet[] = {0x5a, command, uint8_t(command ^ 0xff)};
+ 	send(packet, sizeof(packet));
+-	return ack();
++	return ack(timeoutMs);
++}
++
++bool Bootloader::connect() {
++	m_connected = false;
++	m_io.byte(0x5a);
++	// An already synchronized ROM can NACK the sync byte; Get ID confirms the session.
++	ack(100);
++	if (!command(0x02, 100)) {
++		return false;
++	}
++	m_io.byte(0); // Receive-data BUSY byte.
++	if (m_io.byte(0) != 1) {
++		return false;
++	}
++	uint16_t id = uint16_t(m_io.byte(0)) << 8;
++	id |= m_io.byte(0);
++	m_connected = ack(100) && id == 0x0460; // STM32G07x/08x, RM0444 option layout.
++	return m_connected;
+ }
+ 
+ bool Bootloader::address(uint32_t address) {
+@@ -55,33 +73,52 @@ bool Bootloader::address(uint32_t address) {
+ 	return ack();
+ }
+ 
+-bool Bootloader::write(uint32_t location, const uint8_t* data) {
+-	if (!command(0x31) || !address(location)) {
++bool Bootloader::write(uint32_t location, const uint8_t* data, size_t size) {
++	if (size == 0 || size > 256 || size % 8 || !command(0x31) || !address(location)) {
+ 		return false;
+ 	}
+-	uint8_t checksum = 255;
+-	m_io.byte(255);
+-	for (size_t i = 0; i < 256; i++) {
++	uint8_t checksum = uint8_t(size - 1);
++	m_io.byte(checksum);
++	for (size_t i = 0; i < size; i++) {
+ 		m_io.byte(data[i]);
+ 		checksum ^= data[i];
+ 	}
+ 	m_io.byte(checksum);
+-	m_io.sleepMs(10); // Allow programming to finish before polling.
+-	return ack();
++	if (location != OptionsBase) {
++		m_io.sleepMs(10); // Allow main-flash programming to finish before polling.
++	}
++	return ack(location == OptionsBase ? 100 : 1000);
+ }
+ 
+-bool Bootloader::verify(uint32_t location, const uint8_t* data) {
+-	if (!command(0x11) || !address(location)) {
++bool Bootloader::startRead(uint32_t location, size_t size) {
++	if (size == 0 || size > 256 || !command(0x11) || !address(location)) {
+ 		return false;
+ 	}
+-	const uint8_t length[] = {255, 0};
++	const uint8_t length[] = {uint8_t(size - 1), uint8_t((size - 1) ^ 0xff)};
+ 	send(length, sizeof(length));
+ 	if (!ack()) {
+ 		return false;
+ 	}
+ 	m_io.byte(0); // Receive-data BUSY byte.
++	return true;
++}
++
++bool Bootloader::read(uint32_t location, uint8_t* data, size_t size) {
++	if (!startRead(location, size)) {
++		return false;
++	}
++	for (size_t i = 0; i < size; i++) {
++		data[i] = m_io.byte(0);
++	}
++	return true;
++}
++
++bool Bootloader::verify(uint32_t location, const uint8_t* data, size_t size) {
++	if (!startRead(location, size)) {
++		return false;
++	}
+ 	bool matches = true;
+-	for (size_t i = 0; i < 256; i++) {
++	for (size_t i = 0; i < size; i++) {
+ 		if (m_io.byte(0) != data[i]) {
+ 			matches = false;
+ 		}
+@@ -89,12 +126,41 @@ bool Bootloader::verify(uint32_t location, const uint8_t* data) {
+ 	return matches;
+ }
+ 
++bool Bootloader::enableBootPin() {
++	uint8_t options[OptionsSize];
++	if (!read(OptionsBase, options, sizeof(options)) || !verify(OptionsBase, options, sizeof(options))) {
++		return false;
++	}
++	// RM0444: seven option pairs at +0x00..0x30 and SECR at +0x70; the rest is reserved.
++	static constexpr uint8_t offsets[] = {0, 8, 16, 24, 32, 40, 48, 112};
++	for (auto offset : offsets) {
++		if ((little32(options + offset) ^ little32(options + offset + 4)) != 0xffffffffU) {
++			return false;
++		}
++	}
++	const uint32_t user = little32(options);
++	const uint32_t nrstMode = (user >> 27) & 3;
++	if ((user & 0xff) != 0xaa || !(user & (1U << 25)) || (little32(options + 112) & (1U << 16)) ||
++		(nrstMode != 1 && nrstMode != 3)) {
++		return false;
++	}
++	if (!(user & (1U << 24))) {
++		return true;
++	}
++	options[3] &= ~1U; // nBOOT_SEL and its complemented copy; preserve every other option bit.
++	options[7] |= 1U;
++	// Reload can interrupt the final ACK; only reconnect and full readback establish success.
++	write(OptionsBase, options, sizeof(options));
++	m_connected = false;
++	m_io.reconnect();
++	return connect() && verify(OptionsBase, options, sizeof(options));
++}
++
+ bool Bootloader::flash(const uint8_t* image, size_t size) {
+ 	if (!validImage(image, size)) {
+ 		return false;
+ 	}
+-	m_io.byte(0x5a);
+-	if (!ack() || !command(0x44)) {
++	if ((!m_connected && !connect()) || !enableBootPin() || !command(0x44)) {
+ 		return false;
+ 	}
+ 	const uint8_t erase[] = {255, 255, 0};
+@@ -107,11 +173,14 @@ bool Bootloader::flash(const uint8_t* image, size_t size) {
+ 		std::memset(block, 255, sizeof(block));
+ 		const size_t count = size - offset < 256 ? size - offset : 256;
+ 		std::memcpy(block, image + offset, count);
+-		if (!write(FlashBase + offset, block) || !verify(FlashBase + offset, block)) {
++		if (!write(FlashBase + offset, block, sizeof(block)) || !verify(FlashBase + offset, block, sizeof(block))) {
+ 			return false;
+ 		}
+ 	}
+-	// The board resets into the application after deselecting SPI.
+ 	return true;
+ }
++
++bool Bootloader::go() {
++	return m_connected && command(0x21) && address(FlashBase);
++}
+ } // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/bootloader.h b/firmware/hw_layer/g0_extension/bootloader.h
+index 9f8c018577..a0d985ddc5 100644
+--- a/firmware/hw_layer/g0_extension/bootloader.h
++++ b/firmware/hw_layer/g0_extension/bootloader.h
+@@ -7,6 +7,8 @@ struct BootTransport {
+ 	// The hardware adapter spaces bytes by at least 15 us (ST AN4286).
+ 	virtual uint8_t byte(uint8_t value) = 0;
+ 	virtual void sleepMs(uint32_t delay) = 0;
++	// Deselect, wait for option-byte reload, then reselect without pulsing NRST.
++	virtual void reconnect() = 0;
+ };
+ 
+ class Bootloader {
+@@ -16,15 +18,23 @@ public:
+ 	static constexpr uint32_t FlashBase = 0x08000000;
+ 	static constexpr size_t FlashSize = 128 * 1024;
+ 	static bool validImage(const uint8_t* image, size_t size);
++	bool connect();
+ 	bool flash(const uint8_t* image, size_t size);
++	bool go();
+ 
+ private:
++	static constexpr uint32_t OptionsBase = 0x1FFF7800;
++	static constexpr size_t OptionsSize = 128;
+ 	bool ack(uint32_t timeoutMs = 1000);
+ 	void send(const uint8_t* data, size_t size);
+-	bool command(uint8_t command);
++	bool command(uint8_t command, uint32_t timeoutMs = 1000);
+ 	bool address(uint32_t address);
+-	bool write(uint32_t address, const uint8_t* data);
+-	bool verify(uint32_t address, const uint8_t* data);
++	bool startRead(uint32_t address, size_t size);
++	bool read(uint32_t address, uint8_t* data, size_t size);
++	bool write(uint32_t address, const uint8_t* data, size_t size);
++	bool verify(uint32_t address, const uint8_t* data, size_t size);
++	bool enableBootPin();
+ 	BootTransport& m_io;
++	bool m_connected = false;
+ };
+ } // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/tests/CMakeLists.txt b/firmware/hw_layer/g0_extension/tests/CMakeLists.txt
+index ae96915c73..a809a83eb3 100644
+--- a/firmware/hw_layer/g0_extension/tests/CMakeLists.txt
++++ b/firmware/hw_layer/g0_extension/tests/CMakeLists.txt
+@@ -14,6 +14,9 @@ add_test(NAME g0_tests COMMAND g0_tests)
+ add_executable(g0_output_tests test_output_gpio.cpp ../link.cpp)
+ target_include_directories(g0_output_tests PRIVATE mocks)
+ add_test(NAME g0_output_tests COMMAND g0_output_tests)
++add_executable(g0_updater_tests test_updater.cpp ../bootloader.cpp ../link.cpp)
++target_include_directories(g0_updater_tests PRIVATE updater_mocks)
++add_test(NAME g0_updater_tests COMMAND g0_updater_tests)
+ find_package(Python3 COMPONENTS Interpreter REQUIRED)
+ add_test(NAME g0_image_tests COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_image.py)
+ set_tests_properties(g0_image_tests PROPERTIES ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+diff --git a/firmware/hw_layer/g0_extension/tests/bootloader_fixture.h b/firmware/hw_layer/g0_extension/tests/bootloader_fixture.h
+new file mode 100644
+index 0000000000..e9c4252af1
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/tests/bootloader_fixture.h
+@@ -0,0 +1,148 @@
++#pragma once
++#include "../bootloader.h"
++#include <array>
++#include <cassert>
++#include <utility>
++#include <vector>
++
++namespace boot_test {
++using Options = std::array<uint8_t, 128>;
++constexpr uint32_t optionsAddress = 0x1fff7800;
++
++inline void word(uint8_t* data, uint32_t value) {
++	for (unsigned i = 0; i < 4; i++) {
++		data[i] = value >> (8 * i);
++		data[i + 4] = ~data[i];
++	}
++}
++
++inline Options options(bool bootPinEnabled = false) {
++	Options data;
++	data.fill(0xff);
++	for (unsigned offset = 0; offset <= 48; offset += 8) {
++		word(data.data() + offset, 0x12340000 + offset);
++	}
++	word(data.data(), bootPinEnabled ? 0xdeffe1aa : 0xdfffe1aa);
++	word(data.data() + 112, 0);
++	return data;
++}
++
++inline Options withBootPin(Options data) {
++	data[3] &= ~1U;
++	data[7] |= 1;
++	return data;
++}
++
++struct Script : g0::BootTransport {
++	std::vector<std::pair<uint8_t, uint8_t>> bytes;
++	std::vector<size_t> reconnectAt;
++	size_t offset = 0;
++	uint32_t waited = 0;
++	size_t reconnects = 0;
++	uint8_t byte(uint8_t value) override {
++		assert(offset < bytes.size());
++		const auto expected = bytes[offset++];
++		assert(value == expected.first);
++		return expected.second;
++	}
++	void sleepMs(uint32_t delay) override {
++		waited += delay;
++	}
++	void reconnect() override {
++		assert(reconnects < reconnectAt.size() && reconnectAt[reconnects] == offset);
++		reconnects++;
++	}
++	void send(std::initializer_list<uint8_t> values) {
++		for (auto value : values) {
++			bytes.emplace_back(value, 0x79); // Spurious MISO ACKs must not truncate a packet.
++		}
++	}
++	void ack(uint8_t result = 0x79) {
++		bytes.insert(bytes.end(), {{0, 0xa5}, {0, result}});
++		if (result == 0x79) {
++			bytes.emplace_back(0x79, 0xa5);
++		}
++	}
++	void command(uint8_t value) {
++		send({0x5a, value, uint8_t(value ^ 0xff)});
++		ack();
++	}
++	void address(uint32_t value) {
++		const uint8_t a = value >> 24, b = value >> 16, c = value >> 8, d = value;
++		send({a, b, c, d, uint8_t(a ^ b ^ c ^ d)});
++		ack();
++	}
++	void connect(uint16_t id = 0x460, uint8_t sync = 0x79) {
++		send({0x5a});
++		ack(sync);
++		command(0x02);
++		bytes.insert(bytes.end(), {{0, 0xa5}, {0, 1}, {0, uint8_t(id >> 8)}, {0, uint8_t(id)}});
++		ack();
++	}
++	void read(uint32_t location, const uint8_t* data, size_t size) {
++		command(0x11);
++		address(location);
++		send({uint8_t(size - 1), uint8_t((size - 1) ^ 0xff)});
++		ack();
++		bytes.emplace_back(0, 0xa5);
++		for (size_t i = 0; i < size; i++) {
++			bytes.emplace_back(0, data[i]);
++		}
++	}
++	void write(uint32_t location, const uint8_t* data, size_t size, bool reloading = false, bool lostAck = false) {
++		command(0x31);
++		address(location);
++		uint8_t checksum = size - 1;
++		send({checksum});
++		for (size_t i = 0; i < size; i++) {
++			send({data[i]});
++			checksum ^= data[i];
++		}
++		send({checksum});
++		if (lostAck) {
++			for (unsigned i = 0; i < 101; i++) {
++				bytes.emplace_back(0, 0);
++			}
++		} else {
++			ack();
++		}
++		if (reloading) {
++			reconnectAt.push_back(bytes.size());
++		}
++	}
++	void provision(const Options& original) {
++		read(optionsAddress, original.data(), original.size());
++		read(optionsAddress, original.data(), original.size());
++		const auto changed = withBootPin(original);
++		if (changed != original) {
++			write(optionsAddress, changed.data(), changed.size(), true);
++			connect();
++			read(optionsAddress, changed.data(), changed.size());
++		}
++	}
++	void flash(const uint8_t* data, size_t size, bool corrupt = false) {
++		command(0x44);
++		send({255, 255, 0});
++		ack();
++		for (size_t position = 0; position < size; position += 256) {
++			std::array<uint8_t, 256> block;
++			block.fill(0xff);
++			for (size_t i = 0; i < block.size() && position + i < size; i++) {
++				block[i] = data[position + i];
++			}
++			write(g0::Bootloader::FlashBase + position, block.data(), block.size());
++			if (corrupt) {
++				block[10] ^= 1;
++			}
++			read(g0::Bootloader::FlashBase + position, block.data(), block.size());
++			if (corrupt) {
++				break;
++			}
++		}
++	}
++	void go() {
++		command(0x21);
++		address(g0::Bootloader::FlashBase);
++	}
++};
++} // namespace boot_test
+diff --git a/firmware/hw_layer/g0_extension/tests/test_bootloader.cpp b/firmware/hw_layer/g0_extension/tests/test_bootloader.cpp
+index 98d012e25c..67f696cb30 100644
+--- a/firmware/hw_layer/g0_extension/tests/test_bootloader.cpp
++++ b/firmware/hw_layer/g0_extension/tests/test_bootloader.cpp
+@@ -1,89 +1,25 @@
+-#include "../bootloader.h"
+-#include <cassert>
+-#include <utility>
+-#include <vector>
++#include "bootloader_fixture.h"
++#include <algorithm>
+ 
+ using namespace g0;
++using namespace boot_test;
+ 
+ namespace {
+-struct Script : BootTransport {
+-	std::vector<std::pair<uint8_t, uint8_t>> bytes;
+-	size_t offset = 0;
+-	uint32_t waited = 0;
+-	uint8_t byte(uint8_t value) override {
+-		assert(offset < bytes.size());
+-		const auto expected = bytes[offset++];
+-		assert(value == expected.first);
+-		return expected.second;
+-	}
+-	void sleepMs(uint32_t delay) override {
+-		waited += delay;
+-	}
+-	void send(std::initializer_list<uint8_t> values) {
+-		// Spurious MISO ACKs while sending must not truncate the outgoing packet.
+-		for (auto value : values) {
+-			bytes.emplace_back(value, 0x79);
+-		}
+-	}
+-	void ack() {
+-		bytes.insert(bytes.end(), {{0, 0xa5}, {0, 0x79}, {0x79, 0xa5}});
+-	}
+-};
+-
+ std::vector<uint8_t> image() {
+ 	std::vector<uint8_t> data(258, 0x79);
+-	// SP = top of 36 KiB RAM, reset vector = flash + 9 (Thumb).
+ 	const uint8_t vectors[] = {0, 0x90, 0, 0x20, 9, 0, 0, 8};
+-	for (size_t i = 0; i < 8; i++) {
+-		data[i] = vectors[i];
+-	}
++	std::copy(std::begin(vectors), std::end(vectors), data.begin());
+ 	return data;
+ }
+ 
+-Script flashScript(const std::vector<uint8_t>& data, bool corrupt) {
++void badOptions(const Options& data) {
+ 	Script io;
+-	io.send({0x5a});
+-	io.ack();
+-	io.send({0x5a, 0x44, 0xbb});
+-	io.ack();
+-	io.send({255, 255, 0});
+-	io.ack();
+-	for (unsigned block = 0; block < 2; block++) {
+-		const uint8_t a[] = {8, 0, uint8_t(block), 0, uint8_t(8 ^ block)};
+-		io.send({0x5a, 0x31, 0xce});
+-		io.ack();
+-		io.send({a[0], a[1], a[2], a[3], a[4]});
+-		io.ack();
+-		io.send({255});
+-		uint8_t checksum = 255;
+-		for (size_t i = 0; i < 256; i++) {
+-			const size_t offset = block * 256 + i;
+-			const uint8_t value = offset < data.size() ? data[offset] : 255;
+-			io.bytes.emplace_back(value, 0x79);
+-			checksum ^= value;
+-		}
+-		io.send({checksum});
+-		io.ack();
+-		io.send({0x5a, 0x11, 0xee});
+-		io.ack();
+-		io.send({a[0], a[1], a[2], a[3], a[4]});
+-		io.ack();
+-		io.send({255, 0});
+-		io.ack();
+-		io.bytes.emplace_back(0, 0xa5);
+-		for (size_t i = 0; i < 256; i++) {
+-			const size_t offset = block * 256 + i;
+-			uint8_t value = offset < data.size() ? data[offset] : 255;
+-			if (corrupt && block == 0 && i == 10) {
+-				value ^= 1;
+-			}
+-			io.bytes.emplace_back(0, value);
+-		}
+-		if (corrupt) {
+-			break;
+-		}
+-	}
+-	return io;
++	io.connect();
++	io.read(optionsAddress, data.data(), data.size());
++	io.read(optionsAddress, data.data(), data.size());
++	auto binary = image();
++	assert(!Bootloader(io).flash(binary.data(), binary.size()));
++	assert(io.offset == io.bytes.size()); // No option write or main-flash erase.
+ }
+ } // namespace
+ 
+@@ -93,25 +29,90 @@ void testBootloader() {
+ 	assert(!Bootloader::validImage(nullptr, data.size()));
+ 	assert(!Bootloader::validImage(data.data(), 7));
+ 	assert(!Bootloader::validImage(data.data(), Bootloader::FlashSize + 1));
+-	auto io = flashScript(data, false);
+-	Bootloader loader(io);
+-	assert(loader.flash(data.data(), data.size()));
+-	assert(io.offset == io.bytes.size());
+-	auto corrupt = flashScript(data, true);
++	for (bool alreadyEnabled : {false, true}) {
++		Script io;
++		io.connect();
++		io.provision(options(alreadyEnabled));
++		io.flash(data.data(), data.size());
++		io.go();
++		Bootloader loader(io);
++		assert(loader.flash(data.data(), data.size()));
++		assert(loader.go());
++		assert(io.offset == io.bytes.size());
++		assert(io.reconnects == (alreadyEnabled ? 0 : 1));
++	}
++	Script connected;
++	connected.connect(0x460, 0x1f); // A ROM that is already synchronized can NACK sync.
++	assert(Bootloader(connected).connect());
++	assert(connected.offset == connected.bytes.size());
++	Script wrongChip;
++	wrongChip.connect(0x466);
++	assert(!Bootloader(wrongChip).flash(data.data(), data.size()));
++	assert(wrongChip.offset == wrongChip.bytes.size());
++
++	auto invalid = options();
++	invalid[4] ^= 1;
++	badOptions(invalid); // Invalid complement.
++	for (uint32_t user : {0xdfffe1ccU, 0xdfffe100U, 0xddffe1aaU, 0xd7ffe1aaU}) {
++		auto config = options();
++		word(config.data(), user);
++		badOptions(config); // RDP levels, nBOOT1=0, NRST configured as GPIO.
++	}
++	invalid = options();
++	word(invalid.data() + 112, 1U << 16);
++	badOptions(invalid); // BOOT_LOCK must remain clear.
++
++	Script unstable;
++	const auto original = options();
++	invalid = original;
++	invalid[48] ^= 1;
++	unstable.connect();
++	unstable.read(optionsAddress, original.data(), original.size());
++	unstable.read(optionsAddress, invalid.data(), invalid.size());
++	assert(!Bootloader(unstable).flash(data.data(), data.size()));
++	assert(unstable.offset == unstable.bytes.size());
++
++	Script notWritten;
++	notWritten.connect();
++	notWritten.read(optionsAddress, original.data(), original.size());
++	notWritten.read(optionsAddress, original.data(), original.size());
++	const auto updated = withBootPin(original);
++	notWritten.write(optionsAddress, updated.data(), updated.size(), true);
++	notWritten.connect();
++	notWritten.read(optionsAddress, original.data(), original.size()); // ROM rejected/failed option programming.
++	assert(!Bootloader(notWritten).flash(data.data(), data.size()));
++	assert(notWritten.offset == notWritten.bytes.size());
++
++	Script lostAck;
++	lostAck.connect();
++	lostAck.read(optionsAddress, original.data(), original.size());
++	lostAck.read(optionsAddress, original.data(), original.size());
++	lostAck.write(optionsAddress, updated.data(), updated.size(), true, true);
++	lostAck.connect();
++	lostAck.read(optionsAddress, updated.data(), updated.size());
++	lostAck.flash(data.data(), data.size());
++	assert(Bootloader(lostAck).flash(data.data(), data.size()));
++	assert(lostAck.offset == lostAck.bytes.size() && lostAck.reconnects == 1);
++
++	Script corrupt;
++	corrupt.connect();
++	corrupt.provision(options(true));
++	corrupt.flash(data.data(), data.size(), true);
+ 	assert(!Bootloader(corrupt).flash(data.data(), data.size()));
+ 	assert(corrupt.offset == corrupt.bytes.size());
+-	Script nack;
+-	nack.send({0x5a});
+-	nack.bytes.insert(nack.bytes.end(), {{0, 0xa5}, {0, 0x1f}});
+-	assert(!Bootloader(nack).flash(data.data(), data.size()));
++
+ 	Script timeout;
+ 	timeout.send({0x5a});
+-	for (unsigned i = 0; i < 1001; i++) {
++	for (unsigned i = 0; i < 101; i++) {
++		timeout.bytes.emplace_back(0, 0);
++	}
++	timeout.send({0x5a, 0x02, 0xfd});
++	for (unsigned i = 0; i < 101; i++) {
+ 		timeout.bytes.emplace_back(0, 0);
+ 	}
+ 	assert(!Bootloader(timeout).flash(data.data(), data.size()));
+-	assert(timeout.waited == 1000);
+-	data[4] = 8; // ARM vector instead of Thumb.
++	assert(timeout.waited == 200 && timeout.offset == timeout.bytes.size());
++	data[4] = 8;
+ 	Script untouched;
+ 	assert(!Bootloader(untouched).flash(data.data(), data.size()));
+ 	assert(untouched.offset == 0);
+diff --git a/firmware/hw_layer/g0_extension/tests/test_updater.cpp b/firmware/hw_layer/g0_extension/tests/test_updater.cpp
+new file mode 100644
+index 0000000000..b2f2545aec
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/tests/test_updater.cpp
+@@ -0,0 +1,125 @@
++#include "../updater.cpp"
++#include "bootloader_fixture.h"
++
++namespace {
++boot_test::Script* rom;
++bool appRunning;
++bool hasApplication;
++bool romStartsApp;
++bool missingDevice;
++uint32_t appVersion;
++unsigned appExchanges;
++unsigned romBytes;
++} // namespace
++
++void palWritePad(unsigned, unsigned pin, bool high) {
++	if (pin == Gpio::B14 && testPinOutputs[pin] && !high) {
++		testResetPulses.push_back(Gpio::B14);
++	}
++	if (pin == Gpio::B14 && !testPins[pin] && high) {
++		appRunning = hasApplication && !testPins[Gpio::B15];
++	}
++	testPins[pin] = high;
++}
++
++void spiExchange(SPIDriver*, size_t size, const void* tx, void* rx) {
++	assert(testSelected && testStarted && testBusLocked);
++	if (size == g0::wire::appFrameSize) {
++		appExchanges++;
++		auto& reply = *static_cast<g0::wire::AppFrame*>(rx);
++		if (appRunning) {
++			reply = {};
++			reply.versionResponse = {
++					{0, 0, g0::wire::cmdReadVersion, g0::wire::versionPayloadLength},
++					appVersion,
++					g0::wire::protocolVersion};
++			g0::wire::seal(reply);
++		}
++		return;
++	}
++	assert(size == 1);
++	romBytes++;
++	if (appRunning || missingDevice) {
++		*static_cast<uint8_t*>(rx) = 0;
++		return;
++	}
++	*static_cast<uint8_t*>(rx) = rom->byte(*static_cast<const uint8_t*>(tx));
++	if (romStartsApp && rom->offset == rom->bytes.size()) {
++		assert(!testPins[Gpio::B15]); // BOOT0 is LOW before Go starts the application.
++		appRunning = true;
++		hasApplication = true;
++		appVersion = g0_image::version;
++	}
++}
++
++static void init(boot_test::Script& script, bool running) {
++	rom = &script;
++	appRunning = running;
++	hasApplication = running;
++	romStartsApp = true;
++	missingDevice = false;
++	appVersion = g0_image::version;
++	appExchanges = romBytes = 0;
++	testPins[Gpio::B14] = true;
++	testPins[Gpio::B15] = false;
++	testPinOutputs[Gpio::B14] = testPinOutputs[Gpio::B15] = false;
++	testResetPulses.clear();
++	assert(!testSelected && !testStarted && !testBusLocked);
++}
++
++static void finished() {
++	assert(!testSelected && !testStarted && !testBusLocked);
++	assert(!testPins[Gpio::B15] && testPins[Gpio::B14]);
++}
++
++int main() {
++	SPIDriver spi;
++	SPIConfig config;
++	boot_test::Script factory;
++	factory.connect();
++	factory.provision(boot_test::options());
++	factory.flash(g0_image::data, sizeof(g0_image::data));
++	factory.go();
++	init(factory, false);
++	assert(g0::updateFirmware(spi, config, Gpio::B14, Gpio::B15));
++	assert(testResetPulses.empty()); // No NRST pulse before provisioning, or after first programming.
++	assert(factory.offset == factory.bytes.size() && appExchanges == 2);
++	finished();
++
++	boot_test::Script upToDate;
++	init(upToDate, true);
++	assert(g0::updateFirmware(spi, config, Gpio::B14, Gpio::B15));
++	assert(upToDate.offset == 0 && testResetPulses.size() == 1);
++	finished();
++
++	boot_test::Script older;
++	older.connect();
++	older.provision(boot_test::options(true));
++	older.flash(g0_image::data, sizeof(g0_image::data));
++	older.go();
++	init(older, true);
++	appVersion--;
++	assert(g0::updateFirmware(spi, config, Gpio::B14, Gpio::B15));
++	assert(older.offset == older.bytes.size() && testResetPulses.size() == 2);
++	finished();
++
++	boot_test::Script invalidOptions;
++	invalidOptions.connect();
++	auto invalid = boot_test::options();
++	invalid[4] ^= 1;
++	invalidOptions.read(boot_test::optionsAddress, invalid.data(), invalid.size());
++	invalidOptions.read(boot_test::optionsAddress, invalid.data(), invalid.size());
++	init(invalidOptions, false);
++	romStartsApp = false;
++	assert(!g0::updateFirmware(spi, config, Gpio::B14, Gpio::B15));
++	assert(invalidOptions.offset == invalidOptions.bytes.size() && testResetPulses.empty());
++	assert(!hasApplication);
++	finished();
++
++	boot_test::Script absent;
++	init(absent, false);
++	missingDevice = true;
++	assert(!g0::updateFirmware(spi, config, Gpio::B14, Gpio::B15));
++	assert(absent.offset == 0 && testResetPulses.size() == 2);
++	finished();
++}
+diff --git a/firmware/hw_layer/g0_extension/tests/updater_mocks/g0_firmware_image.h b/firmware/hw_layer/g0_extension/tests/updater_mocks/g0_firmware_image.h
+new file mode 100644
+index 0000000000..8a2ba84cbd
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/tests/updater_mocks/g0_firmware_image.h
+@@ -0,0 +1,5 @@
++#pragma once
++namespace g0_image {
++static constexpr unsigned version = 1234;
++static constexpr unsigned char data[] = {0, 0x90, 0, 0x20, 9, 0, 0, 8, 1, 2, 3, 4, 5, 6, 7, 8};
++} // namespace g0_image
+diff --git a/firmware/hw_layer/g0_extension/tests/updater_mocks/mpu_util.h b/firmware/hw_layer/g0_extension/tests/updater_mocks/mpu_util.h
+new file mode 100644
+index 0000000000..41b31c0fd1
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/tests/updater_mocks/mpu_util.h
+@@ -0,0 +1,2 @@
++#pragma once
++#define NO_CACHE
+diff --git a/firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h b/firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h
+new file mode 100644
+index 0000000000..602fe957c0
+--- /dev/null
++++ b/firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h
+@@ -0,0 +1,61 @@
++#pragma once
++#include <cassert>
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++enum Gpio {
++	B14,
++	B15
++};
++using brain_pin_e = Gpio;
++struct SPIDriver {};
++struct SPIConfig {};
++constexpr unsigned PAL_MODE_OUTPUT_PUSHPULL = 1;
++inline bool testPins[] = {true, false};
++inline bool testPinOutputs[2] = {};
++inline std::vector<Gpio> testResetPulses;
++inline bool testSelected = false;
++inline bool testBusLocked = false;
++inline bool testStarted = false;
++inline uint32_t testWaited = 0;
++inline void chThdSleepMilliseconds(uint32_t ms) {
++	testWaited += ms;
++}
++inline void chThdSleepMicroseconds(uint32_t) {}
++inline void efiPrintf(const char*, ...) {}
++inline unsigned getHwPort(const char*, Gpio) {
++	return 0;
++}
++inline unsigned getHwPin(const char*, Gpio pin) {
++	return pin;
++}
++void palWritePad(unsigned, unsigned pin, bool high);
++inline void efiSetPadMode(const char*, Gpio pin, unsigned) {
++	assert(testPins[pin]); // Preload both latches HIGH before enabling either output driver.
++	testPinOutputs[pin] = true;
++}
++inline void spiAcquireBus(SPIDriver*) {
++	assert(!testBusLocked);
++	testBusLocked = true;
++}
++inline void spiReleaseBus(SPIDriver*) {
++	assert(testBusLocked);
++	testBusLocked = false;
++}
++inline void spiStart(SPIDriver*, const SPIConfig*) {
++	assert(testBusLocked);
++	testStarted = true;
++}
++inline void spiStop(SPIDriver*) {
++	assert(!testSelected);
++	testStarted = false;
++}
++inline void spiSelect(SPIDriver*) {
++	assert(testStarted);
++	testSelected = true;
++}
++inline void spiUnselect(SPIDriver*) {
++	testSelected = false;
++}
++void spiExchange(SPIDriver*, size_t, const void*, void*);
+diff --git a/firmware/hw_layer/g0_extension/updater.cpp b/firmware/hw_layer/g0_extension/updater.cpp
+index f0113c5e8d..a078521256 100644
+--- a/firmware/hw_layer/g0_extension/updater.cpp
++++ b/firmware/hw_layer/g0_extension/updater.cpp
+@@ -55,6 +55,11 @@ public:
+ 	void sleepMs(uint32_t delay) override {
+ 		chThdSleepMilliseconds(delay);
+ 	}
++	void reconnect() override {
++		spiUnselect(&m_spi);
++		chThdSleepMilliseconds(100);
++		spiSelect(&m_spi);
++	}
+ 
+ private:
+ 	SPIDriver& m_spi;
+@@ -66,23 +71,40 @@ bool updateFirmware(SPIDriver& spi, const SPIConfig& spiSettings, brain_pin_e re
+ 	if (!Bootloader::validImage(g0_image::data, sizeof(g0_image::data))) {
+ 		return false;
+ 	}
++	// Preserve the factory ROM session: NRST must never briefly go low during GPIO setup.
++	pin(resetPin, true);
++	pin(bootPin, true);
+ 	efiSetPadMode("G0 BOOT", bootPin, PAL_MODE_OUTPUT_PUSHPULL);
+ 	efiSetPadMode("G0 RESET", resetPin, PAL_MODE_OUTPUT_PUSHPULL);
+ 	spiAcquireBus(&spi);
+ 	spiStart(&spi, &spiSettings);
+-	reset(resetPin, bootPin, false);
+-	bool ok = versionMatches(spi);
+-	if (!ok) {
+-		efiPrintf("G0: programming bundled firmware");
+-		reset(resetPin, bootPin, true);
+-		spiSelect(&spi);
+-		Transport transport(spi);
+-		Bootloader loader(transport);
+-		ok = loader.flash(g0_image::data, sizeof(g0_image::data));
++	chThdSleepMilliseconds(100);
++	Transport transport(spi);
++	Bootloader loader(transport);
++	spiSelect(&spi);
++	bool inRom = loader.connect();
++	bool ok = false;
++	if (!inRom) {
+ 		spiUnselect(&spi);
+ 		reset(resetPin, bootPin, false);
++		ok = versionMatches(spi);
++		if (!ok) {
++			reset(resetPin, bootPin, true);
++			spiSelect(&spi);
++			inRom = loader.connect();
++		}
++	}
++	if (inRom) {
++		efiPrintf("G0: provisioning and programming bundled firmware");
++		ok = loader.flash(g0_image::data, sizeof(g0_image::data));
++		pin(bootPin, false);
++		// Go bypasses the latched EMPTY flag on first programming, including older ROMs.
++		ok = ok && loader.go();
++		spiUnselect(&spi);
++		chThdSleepMilliseconds(100);
+ 		ok = ok && versionMatches(spi);
+ 	}
++	spiUnselect(&spi);
+ 	spiStop(&spi);
+ 	spiReleaseBus(&spi);
+ 	// Retain ownership: these are dedicated expansion control pins.
+diff --git a/firmware/hw_layer/ports/stm32/stm32h7/cfg/board.h b/firmware/hw_layer/ports/stm32/stm32h7/cfg/board.h
+index c80977b761..4bf27baa5d 100644
+--- a/firmware/hw_layer/ports/stm32/stm32h7/cfg/board.h
++++ b/firmware/hw_layer/ports/stm32/stm32h7/cfg/board.h
+@@ -253,7 +253,12 @@
+                                      EFI_PIN_MODE_DEFAULT(15))
+ #define VAL_GPIOB_OTYPER            VAL_GPIO_OTYPER_ALL_DEFAULT
+ #define VAL_GPIOB_OSPEEDR           VAL_GPIO_OSPEEDR_ALL_DEFAULT
++#if defined(ATLAS_G0_BOOT_CONTROL)
++/* Keep G0 NRST released throughout both the ECU bootloader and main firmware startup. */
++#define VAL_GPIOB_PUPDR             ((VAL_GPIO_PUPDR_ALL_DEFAULT & ~(3U << 28U)) | PIN_PUPDR_PULLUP(14U))
++#else
+ #define VAL_GPIOB_PUPDR             VAL_GPIO_PUPDR_ALL_DEFAULT
++#endif
+ #define VAL_GPIOB_ODR               VAL_GPIO_ODR_ALL_DEFAULT
+ #define VAL_GPIOB_AFRL              (PIN_AFIO_AF(0, 0U) |          \
+                                      PIN_AFIO_AF(1, 0U) |          \
+-- 
+2.53.0
+

@@ -1,11 +1,13 @@
-The compact fome-fw integration is a six-commit stack based on current
+The compact fome-fw integration has six module branches based on
 `upstream/master` at `e628773bd0`. Every part uses protocol 9; audit fixes are
 included in the module that owns them.
 
 [BRANCHES.md](BRANCHES.md) lists the published fork branches and review bases.
+[UPDATER_PR.md](UPDATER_PR.md) contains the updated description for the updater PR.
 [series.json](series.json) records the exact commits and pinned G0 source.
 The source mirror in [modules](modules/) matches the final branch, and
-[patches/series](patches/series) lists the six patches in merge order.
+[patches/series](patches/series) lists the seven patches in merge order. The
+seventh patch adds factory BOOT0 provisioning to the updater module.
 
 | Part | Scope |
 | --- | --- |
@@ -14,7 +16,7 @@ The source mirror in [modules](modules/) matches the final branch, and
 | 3 | Twelve ADC inputs, expiry and filter recovery |
 | 4 | Four digital inputs and acknowledged mode configuration |
 | 5 | Four lowsides, local PWM, inversion and Lua frequency changes |
-| 6 | Automatic G0 image build/bundling and verified startup programming |
+| 6 | Automatic G0 image build/bundling, factory BOOT0 provisioning and verified startup programming |
 
 Each branch contains its preceding parts. The I/O parts opt in with
 `G0_EXTENSION=yes`; the final updater part enables Atlas support by default.

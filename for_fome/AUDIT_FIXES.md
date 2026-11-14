@@ -34,3 +34,10 @@ GPIO capture measures interrupt arrival times, so input rate and timing accuracy
 still need bench verification. SENT is deliberately unavailable. Nothing has
 been flashed; ROM boot behavior, interrupted programming, output electrical
 levels and SPI recovery timing still require the real Atlas/expansion hardware.
+
+The updater also provisions factory G071 BOOT0 selection. It preserves the live
+ROM session before any NRST pulse, validates and reads the complete option block
+twice, clears nBOOT_SEL and its inverse only when needed, and verifies every
+option byte before erasing main flash. ROM Go starts the verified image without
+relying on EMPTY being cleared by a reset. A factory chip that has already lost
+its ROM session may require a full power cycle before provisioning.
