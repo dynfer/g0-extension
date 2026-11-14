@@ -1,7 +1,8 @@
-The new fome-fw integration targets the local `upstream/master` revision
-`b3ae7a9aa0` and the version 8 extension protocol at `19f0c4c` in this repository.
+The modular fome-fw integration starts at `upstream/master` revision
+`b3ae7a9aa0`. The audit follow-up upgrades both ends to protocol 9 with CRCs,
+link-loss shutdown and automatic firmware identities; see [AUDIT_FIXES.md](AUDIT_FIXES.md).
 
-The implementation is in [modules](modules/), and the seven ordered commits for six PR parts
+The implementation is in [modules](modules/), and the eight ordered commits for six PR parts
 are exported in [patches](patches/series). [series.json](series.json)
 records the exact base and commit IDs. [ANALYSIS.md](ANALYSIS.md) explains the
 existing implementations and the remaining limitations.
@@ -10,7 +11,7 @@ The complete integration is available as local branch `codex/g0-modular` in
 `/home/denes/fome-fw`. [VALIDATION.md](VALIDATION.md) records the build and test results.
 Separate [PR branches](BRANCHES.md) are published to the `dynfer/fome-fw` fork.
 The updater branch also preserves the newer upstream merge made on the fork;
-the seven exported patches retain the original base for staged integration.
+the eight exported patches retain the original base for staged integration.
 
 | Merge request | Scope |
 | --- | --- |
@@ -24,7 +25,9 @@ the seven exported patches retain the original base for staged integration.
 The patches are cumulative; merge them in this order. Atlas enables G0 support
 and automatic image bundling by default; `G0_EXTENSION=no` disables both. The base already supplies ADC providers and the background SPI worker,
 so those frameworks do not need to be reintroduced. Parts 1..5 require no firmware
-image, extension submodule, Java UI changes, or firmware-loader code.
+image, extension submodule, Java UI changes, or firmware-loader code. The final
+audit follow-up coordinates changes across these parts; use the complete series
+with the new slave firmware.
 
 To apply the series in a separate fome-fw worktree:
 
@@ -35,7 +38,7 @@ git -C /tmp/fome-g0-review am /home/denes/g0-extension/for_fome/patches/*.patch
 
 The patch base is recorded exactly; a newer upstream revision may need rebasing.
 The source copies in `modules/` correspond to
-`firmware/hw_layer/g0_extension/` after all six patches. Existing-file changes,
+`firmware/hw_layer/g0_extension/` after the complete patch series. Existing-file changes,
 connector definitions, and build wiring are included in the patches.
 
 Run the standalone host tests from this repository:
@@ -53,7 +56,7 @@ cd /path/to/patched/fome-fw/firmware/config/boards/atlas
 bash ./compile_atlas.sh
 ```
 
-SENT sensor registration and frequency-sensor integration are deferred. The
-current extension's SENT decoder does not validate CRCs, and its outputs retain
-their last command after communication loss. The host integration cannot provide
-a slave-side output watchdog; see the analysis before selecting loads.
+SENT is rejected until a validated decoder exists. Registering frequency sensors
+with fome-fw remains a separate integration step. Outputs shut off after 500 ms
+without a checksum-valid request. Hardware timing and the physical updater path
+still need bench verification.

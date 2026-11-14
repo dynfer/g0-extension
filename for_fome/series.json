@@ -35,11 +35,18 @@
       "part": 6,
       "commit": "3f0689702d42d2533f202c8b5ca6874e699ebe55",
       "title": "g0: automatically build and bundle companion firmware in Atlas binaries"
+    },
+    {
+      "part": 6,
+      "commit": "9992d7a852bf28adf45d500edccc63cf2e3fdcb0",
+      "title": "g0: validate frames and bundle identifiable fail-safe companion firmware"
     }
   ],
   "published_updater_branch": {
     "branch": "codex/g0-06-updater",
     "base": "15aa40ba80aed1a196ef18f5898ce9fb52bbebff",
-    "tip": "7164cbba3b1a0e0b386af0972fb3297e6ed54e72"
-  }
+    "tip": "ae7793cccdb242579e868b5a65a72c0f902b2cf4"
+  },
+  "companion_revision": "5fdddd58c64ee41bbe68ac9801b7139ec0e3ebbc",
+  "protocol_version": 9
 }

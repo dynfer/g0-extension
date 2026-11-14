@@ -5,3 +5,4 @@
 0005-g0-add-queued-lowsides-and-local-PWM-with-verified-a.patch
 0006-g0-add-optional-startup-updater-with-image-validatio.patch
 0007-g0-automatically-build-and-bundle-companion-firmware.patch
+0008-g0-validate-frames-and-bundle-identifiable-fail-safe.patch
