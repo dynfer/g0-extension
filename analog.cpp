@@ -3,12 +3,6 @@
 #include "ch.hpp"
 #include "hal.h"
 
-const uint8_t analogInputChannels[analogInputCount] = {
-    0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 17U, 18U
-};
-volatile uint16_t analogVoltagesMillivolts[analogInputCount];
-volatile bool analogVoltagesReady = false;
-
 namespace {
 
 THD_WORKING_AREA(analogThreadWa, 512);
@@ -23,7 +17,22 @@ public:
         adcStartConversion(&ADCD1, &conversionGroup, adcBuffer, samplesPerChannel);
     }
 
+    bool snapshot(uint16_t *millivolts)
+    {
+        chSysLock();
+        const bool fresh = ready && ADCD1.state == ADC_ACTIVE &&
+            chVTTimeElapsedSinceX(publishedAt) < TIME_MS2I(250);
+        for (uint8_t channel = 0; channel < numChannels; channel++) {
+            millivolts[channel] = fresh ? voltages[channel] : 0U;
+        }
+        chSysUnlock();
+        return fresh;
+    }
+
 private:
+    bool ready = false;
+    systime_t publishedAt = 0;
+    uint16_t voltages[analogInputCount] = {};
     static constexpr uint8_t numChannels = analogInputCount;
     // 4x hardware oversampling plus 32 software-averaged scans per published update
     // gives 128x effective averaging while keeping latency low enough for >50 Hz reads.
@@ -50,6 +59,13 @@ private:
     adcsample_t adcBuffer[numChannels * samplesPerChannel] = {};
 
     static AnalogSampler *instance;
+
+    static void adcErrorCallback(ADCDriver *, adcerror_t)
+    {
+        chSysLockFromISR();
+        instance->ready = false;
+        chSysUnlockFromISR();
+    }
 
     static void adcDoneCallback(ADCDriver *adcp)
     {
@@ -97,10 +113,13 @@ private:
         }
 
         chSysLock();
-        for (uint8_t channel = 0U; channel < numChannels; channel++) {
-            analogVoltagesMillivolts[channel] = voltagesMillivolts[channel];
+        if (ADCD1.state == ADC_ACTIVE) {
+            for (uint8_t channel = 0U; channel < numChannels; channel++) {
+                voltages[channel] = voltagesMillivolts[channel];
+            }
+            publishedAt = chVTGetSystemTimeX();
+            ready = true;
         }
-        analogVoltagesReady = true;
         chSysUnlock();
     }
 
@@ -109,7 +128,7 @@ private:
         true,
         numChannels,
         adcDoneCallback,
-        nullptr,
+        adcErrorCallback,
         ADC_CFGR1_CONT | ADC_CFGR1_RES_12BIT,
         ADC_TR_DISABLED,
         ADC_TR_DISABLED,
@@ -129,4 +148,9 @@ AnalogSampler *AnalogSampler::instance = &sampler;
 void startSampling(void)
 {
     sampler.start();
+}
+
+bool analogGetSnapshot(uint16_t *millivolts)
+{
+    return sampler.snapshot(millivolts);
 }

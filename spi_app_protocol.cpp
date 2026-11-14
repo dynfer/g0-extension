@@ -1,7 +1,8 @@
 #include "spi_app_protocol.h"
 
-#include "ch.h"
+#include "ch.hpp"
 #include "hal.h"
+#include "g0_firmware_version.h"
 
 #include "analog.h"
 #include "inputs.h"
@@ -17,6 +18,7 @@ class SpiAppProtocol {
 public:
     void start()
     {
+        instance = this;
         chThdCreateStatic(spiAppThreadWa, sizeof(spiAppThreadWa),
                           NORMALPRIO + 1, threadEntry, this);
     }
@@ -27,15 +29,16 @@ public:
     }
 
 private:
-    static constexpr uint32_t appVersion = 8U;
-
+    static SpiAppProtocol *instance;
+    chibios_rt::BinarySemaphore transferComplete{true};
+    volatile bool transferFailed = false;
     volatile bool updateRequestedFlag = false;
 
     const SPIConfig spi2Config = {
         false,
         true,
-        nullptr,
-        nullptr,
+        transferDone,
+        transferError,
         GPIOB,
         GPIOB_SPI2_NSS,
         0U,
@@ -47,6 +50,45 @@ private:
         static_cast<SpiAppProtocol *>(arg)->thread();
     }
 
+    static void transferDone(SPIDriver *)
+    {
+        chSysLockFromISR();
+        instance->transferComplete.signalI();
+        chSysUnlockFromISR();
+    }
+
+    static void transferError(SPIDriver *)
+    {
+        chSysLockFromISR();
+        instance->transferFailed = true;
+        instance->transferComplete.signalI();
+        chSysUnlockFromISR();
+    }
+
+    static bool partialTransfer()
+    {
+        chSysLock();
+        const size_t remaining = dmaStreamGetTransactionSize(SPID2.dmarx);
+        const bool partial = SPID2.state == SPI_ACTIVE && palReadLine(LINE_SPI2_NSS) &&
+            remaining != 0U && remaining != protocol::appFrameSize;
+        chSysUnlock();
+        return partial;
+    }
+
+    void resetSpi()
+    {
+        while (!palReadLine(LINE_SPI2_NSS)) {
+            chThdSleepMilliseconds(1);
+        }
+        chSysLock();
+        // Reset first: stopping a truncated slave transfer can otherwise wait forever on BSY.
+        rccResetSPI2();
+        spiStopTransferI(&SPID2, nullptr);
+        chSysUnlock();
+        spiStop(&SPID2);
+        spiStart(&SPID2, &spi2Config);
+    }
+
     void thread()
     {
         protocol::AppFrame rxbuf = {};
@@ -54,14 +96,22 @@ private:
 
         spiStart(&SPID2, &spi2Config);
         writeVersionResponse(txbuf, protocol::cmdReadVersion);
+        protocol::seal(txbuf);
 
         while (true) {
-            if (spiExchange(&SPID2, protocol::appFrameSize, txbuf.bytes, rxbuf.bytes) == MSG_OK) {
-                buildResponse(rxbuf, txbuf);
+            transferComplete.reset(true);
+            transferFailed = false;
+            spiStartExchange(&SPID2, protocol::appFrameSize, txbuf.bytes, rxbuf.bytes);
+            while (transferComplete.wait(TIME_MS2I(1)) != MSG_OK) {
+                if (partialTransfer()) {
+                    transferFailed = true;
+                    break;
+                }
             }
-            else {
-                spiStopTransfer(&SPID2, nullptr);
+            if (transferFailed || !buildResponse(rxbuf, txbuf)) {
+                resetSpi();
                 initResponse(txbuf, protocol::cmdNop, protocol::resultBusy, 0U);
+                protocol::seal(txbuf);
             }
         }
     }
@@ -110,18 +160,20 @@ private:
     void writeVersionResponse(protocol::AppFrame &txbuf, uint8_t command)
     {
         initResponse(txbuf, command, protocol::resultOk, protocol::versionPayloadLength);
-        txbuf.versionResponse.version = appVersion;
+        txbuf.versionResponse.version = G0_FIRMWARE_VERSION;
+        txbuf.versionResponse.protocolVersion = protocol::protocolVersion;
     }
 
     void writeAnalogResponse(protocol::AppFrame &txbuf, uint8_t command)
     {
         initResponse(txbuf, command, protocol::resultOk, protocol::analogPayloadLength);
         auto &response = txbuf.analogResponse;
-        response.ready = analogVoltagesReady ? 1U : 0U;
+        uint16_t millivolts[analogInputCount];
+        response.ready = analogGetSnapshot(millivolts) ? 1U : 0U;
         response.channelCount = analogInputCount;
 
         for (uint8_t index = 0U; index < analogInputCount; index++) {
-            response.millivolts[index] = analogVoltagesMillivolts[index];
+            response.millivolts[index] = millivolts[index];
         }
     }
 
@@ -165,37 +217,6 @@ private:
         }
     }
 
-    void writeSentResponse(protocol::AppFrame &txbuf, uint8_t command, uint8_t input)
-    {
-        if (!validInput(input)) {
-            initResponse(txbuf, command, protocol::resultRange, 0U);
-            return;
-        }
-
-        const uint8_t index = input - 1U;
-        SentFrame frame;
-        bool ready;
-
-        chSysLock();
-        frame.data = digitalInputSentFrames[index].data;
-        frame.status = digitalInputSentFrames[index].status;
-        frame.crc = digitalInputSentFrames[index].crc;
-        frame.nibbleCount = digitalInputSentFrames[index].nibbleCount;
-        frame.valid = digitalInputSentFrames[index].valid;
-        ready = digitalInputSentFrameReady[index];
-        digitalInputSentFrameReady[index] = false;
-        chSysUnlock();
-
-        initResponse(txbuf, command, protocol::resultOk, protocol::sentPayloadLength);
-        auto &response = txbuf.sentResponse;
-        response.input = input;
-        response.data = frame.data;
-        response.status = frame.status;
-        response.crc = frame.crc;
-        response.nibbleCount = frame.nibbleCount;
-        response.flags = (ready ? 1U : 0U) | (frame.valid ? (1U << 1U) : 0U);
-    }
-
     void writeOutputResponse(protocol::AppFrame &txbuf, uint8_t command, uint8_t output)
     {
         if (!validOutput(output)) {
@@ -212,8 +233,15 @@ private:
         response.duty = state.duty;
     }
 
-    void buildResponse(const protocol::AppFrame &rxbuf, protocol::AppFrame &txbuf)
+    bool buildResponse(const protocol::AppFrame &rxbuf, protocol::AppFrame &txbuf)
     {
+        if (!protocol::validFrame(rxbuf)) {
+            for (uint8_t output = 1U; output <= outputCount; output++) {
+                outputDisable(output);
+            }
+            return false;
+        }
+        outputCommunicationReceived();
         const uint8_t command = rxbuf.commandRequest.command;
 
         switch (command) {
@@ -233,7 +261,7 @@ private:
             writeAllDigitalResponse(txbuf, command);
             break;
         case protocol::cmdReadSent:
-            writeSentResponse(txbuf, command, rxbuf.indexedRequest.index);
+            initResponse(txbuf, command, protocol::resultInvalid, 0U);
             break;
         case protocol::cmdSetOutput:
             setOutput(txbuf, rxbuf);
@@ -248,6 +276,9 @@ private:
             setInputMode(txbuf, rxbuf);
             break;
         case protocol::cmdEnterUpdate:
+            for (uint8_t output = 1U; output <= outputCount; output++) {
+                outputDisable(output);
+            }
             updateRequestedFlag = true;
             initResponse(txbuf, command, protocol::resultOk, 0U);
             break;
@@ -255,6 +286,8 @@ private:
             initResponse(txbuf, command, protocol::resultInvalid, 0U);
             break;
         }
+        protocol::seal(txbuf);
+        return true;
     }
 
     void setOutput(protocol::AppFrame &txbuf, const protocol::AppFrame &rxbuf)
@@ -296,6 +329,7 @@ private:
 };
 
 SpiAppProtocol spiAppProtocol;
+SpiAppProtocol *SpiAppProtocol::instance = &spiAppProtocol;
 
 }  // namespace
 

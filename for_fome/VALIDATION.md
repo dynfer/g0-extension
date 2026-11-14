@@ -1,3 +1,32 @@
+Audit fixes validated on 2026-11-14 with companion code `5fdddd58c6`,
+protocol 9, and fome-fw `ae7793cccd` (updater branch) / `9992d7a852` (original-base
+patch series). [AUDIT_FIXES.md](AUDIT_FIXES.md) maps all 13 findings to fixes and
+regression coverage.
+
+| Check | Result |
+| --- | --- |
+| G0 normal `make -j12` and `for_fome_image` | Passed with system ARM GCC 14.2; generated identity and image header |
+| Actual slave source regressions | Passed with AddressSanitizer and UndefinedBehaviorSanitizer |
+| Host protocol, production G0 output adapter, bootloader and image-generator suites | Passed with AddressSanitizer and UndefinedBehaviorSanitizer |
+| Firmware identity generator | Two Python tests passed: source/compiler/options/dependency changes, stable output and header timestamps |
+| Clean normal Atlas board script | Passed with bundled G0 firmware and OpenBLT packaging, using vendored ARM GCC 11.3 |
+| Packaged G0 image | All 12,060 bytes found exactly once in `deliver/fome.bin`; `g0_image::data` is in ELF `.rodata` at `0x080d5f50` |
+| Bundled identity | Generated firmware ID `0x722cede0` matches the image-header version |
+| Repeat normal Atlas build | Passed; G0 binary, firmware-ID header and image-header timestamps unchanged |
+| Full native fome-fw tests | Passed: 770 tests from 137 suites |
+| Eight exported patches | Applied with `git am --whitespace=error` from the recorded base; tree matches the original-base branch |
+| Module source mirrors | Match both integration branches byte for byte |
+
+Leak detection was disabled because LeakSanitizer cannot run under ptrace;
+AddressSanitizer and UndefinedBehaviorSanitizer remained enabled. Builds used an
+isolated checkout and writable Gradle cache, preserving the user's checkout and
+unrelated VS Code settings. No hardware was flashed. Input interrupt latency,
+physical startup levels, PWM timing, SPI recovery, BOOT option bytes and the ROM
+programming path still need bench validation. SENT is rejected.
+
+The following records describe the earlier protocol-8 integration and bundling
+validation, before the audit fixes above.
+
 Validation completed on 2026-11-14 against local fome-fw `upstream/master`
 `b3ae7a9aa0`, using extension revision `19f0c4c` and application version 8.
 The final integration commit is recorded in [series.json](series.json).
