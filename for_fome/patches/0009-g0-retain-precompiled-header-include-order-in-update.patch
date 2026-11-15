@@ -1,0 +1,27 @@
+From 06ea4d7ec571a4520b8319ca829163972ea2a5cd Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Sun, 15 Nov 2026 10:03:12 +0100
+Subject: [PATCH] g0: retain precompiled header include order in updater
+
+---
+ firmware/hw_layer/g0_extension/updater.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/firmware/hw_layer/g0_extension/updater.cpp b/firmware/hw_layer/g0_extension/updater.cpp
+index ced97ff900..19ea897865 100644
+--- a/firmware/hw_layer/g0_extension/updater.cpp
++++ b/firmware/hw_layer/g0_extension/updater.cpp
+@@ -1,9 +1,9 @@
++#include "pch.h"
+ #include "updater.h"
+ #include "bootloader.h"
+ #include "g0_firmware_image.h"
+ #include "link.h"
+ #include "mpu_util.h"
+-#include "pch.h"
+ 
+ namespace g0 {
+ namespace {
+-- 
+2.53.0
+

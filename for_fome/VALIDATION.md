@@ -61,3 +61,20 @@ were excluded from the follow-up commit as well.
 
 Hardware timing, electrical levels, BOOT option bytes and physical/interrupted
 ROM programming were not tested. Nothing was flashed. SENT remains unsupported.
+
+Upload follow-up validation on 2026-11-15:
+
+- All four standalone CTest groups pass with AddressSanitizer and UndefinedBehaviorSanitizer.
+- Actual updater tests require the post-Go reset, verify no premature factory reset,
+  count a 20 us polled delay per ROM byte and a 1 ms scheduler sleep per 32 bytes,
+  exercise upload LED activity, and reject a failed Go without resetting the G0.
+- The Atlas board script built and packaged both OpenBLT and the application.
+- All nine exported patches apply with `git am --whitespace=error` from the recorded
+  upstream base and reproduce the final source tree. The module mirror matches.
+
+The observed minute-long transfer is explained by 20 us RTOS sleeps rounding up
+at Atlas's 1 kHz tick frequency. The new byte spacing removes that delay without
+reducing ST's required minimum gap. Actual transfer duration and concurrent-thread
+behavior still require a bench retest. The normal LED callback starts after
+hardware initialization; upload supplies its own running-LED activity. Startup
+still waits for verified remote I/O. No hardware was flashed during these checks.

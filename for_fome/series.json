@@ -42,14 +42,27 @@
       "branch": "codex/g0-v9-06-updater",
       "commit": "e37de65226d562a2e2d42343cf8c648736ac9b76",
       "title": "g0: provision BOOT0 option bytes before first firmware upload"
+    },
+    {
+      "part": 6,
+      "branch": "codex/g0-v9-06-updater",
+      "commit": "c71048d40fb3df40d505de8e8341aa9c88f4be5b",
+      "title": "g0: reset after upload and remove per-byte scheduler delays"
+    },
+    {
+      "part": 6,
+      "branch": "codex/g0-v9-06-updater",
+      "commit": "06ea4d7ec571a4520b8319ca829163972ea2a5cd",
+      "title": "g0: retain precompiled header include order in updater"
     }
   ],
   "published_updater_branch": {
     "branch": "codex/g0-v9-06-updater",
     "base": "52aec6335fb4abe37b7257f32132e89f046019ea",
-    "tip": "e37de65226d562a2e2d42343cf8c648736ac9b76"
+    "tip": "06ea4d7ec571a4520b8319ca829163972ea2a5cd"
   },
   "companion_revision": "5fdddd58c64ee41bbe68ac9801b7139ec0e3ebbc",
   "protocol_version": 9,
-  "provisioning_snapshot_branch": "codex/g0-option-provisioning"
+  "provisioning_snapshot_branch": "codex/g0-option-provisioning",
+  "upload_fixes_branch": "codex/g0-upload-fixes"
 }

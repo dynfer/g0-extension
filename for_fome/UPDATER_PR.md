@@ -11,7 +11,11 @@ preserves the existing ROM session, validates device identity and option bytes,
 clears only nBOOT_SEL and its inverse copy, and verifies the complete option
 block before erasing main flash. Atlas keeps G0 NRST pulled up through both ECU
 firmware stages. The updater verifies every programmed block, starts the G0
-with ROM Go, and checks the application identity before enabling I/O.
+with ROM Go, then pulses NRST with BOOT0 low and checks the application identity
+before enabling I/O. The ROM byte gap uses a cycle-counter delay instead of a
+scheduler-tick sleep; a 1 ms sleep every 32 bytes keeps other threads runnable.
+The running LED shows upload activity while the normal startup LED callback is
+not yet running.
 
 Builds generate the image header automatically and preserve its timestamp when
 the image is unchanged. `G0_FIRMWARE_UPDATE=no` retains runtime I/O without the
@@ -20,7 +24,7 @@ image dependency; `G0_EXTENSION=no` disables the expansion.
 Validation: sanitizer-enabled protocol, output, bootloader and production-updater
 tests; Python image/identity tests; actual G0 slave regressions; and a clean Atlas
 bootloader/application build. The packaged image contains all 12,060 companion
-bytes in readonly storage. All seven exported patches apply cleanly to the
+bytes in readonly storage. All nine exported patches apply cleanly to the
 recorded upstream base and reproduce the branch tree.
 
 Bench verification of option programming, SPI timing and interrupted updates
@@ -32,3 +36,5 @@ enter ROM.
 Review base: `codex/g0-v9-05-outputs`.
 Head: `codex/g0-v9-06-updater`.
 Factory-provisioning follow-up: `e37de65226`, based on `0cb6472e53`.
+
+Upload/reset follow-up tip: `06ea4d7ec5` (review against `e37de65226`).

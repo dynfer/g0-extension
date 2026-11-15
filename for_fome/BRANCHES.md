@@ -10,7 +10,7 @@ follow-up commit for factory BOOT0 provisioning.
 | 3 | [codex/g0-v9-03-adc](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-03-adc) | `ea0e3babbf` | `codex/g0-v9-02-spi-transport` |
 | 4 | [codex/g0-v9-04-digital-inputs](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-04-digital-inputs) | `4cd04606e8` | `codex/g0-v9-03-adc` |
 | 5 | [codex/g0-v9-05-outputs](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-05-outputs) | `52aec6335f` | `codex/g0-v9-04-digital-inputs` |
-| 6 | [codex/g0-v9-06-updater](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-06-updater) | `e37de65226` | `codex/g0-v9-05-outputs` |
+| 6 | [codex/g0-v9-06-updater](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-06-updater) | `06ea4d7ec5` | `codex/g0-v9-05-outputs` |
 
 The commits cover protocol/link, background SPI transport, ADC, digital inputs,
 outputs/PWM, and automatic firmware bundling/updating, respectively. Their fixes
@@ -31,3 +31,9 @@ The earlier `codex/g0-01-*` through `codex/g0-06-*`, `codex/g0-modular` and
 `codex/g0-safety-fixes` branches remain unchanged as historical snapshots. The
 compact branches replace the previous eight-patch export without force-pushing
 those branches. The user's `ps_idle` checkout and uncommitted files are preserved.
+
+The upload fixes are also published on
+[codex/g0-upload-fixes](https://github.com/dynfer/fome-fw/tree/codex/g0-upload-fixes).
+Compare against `e37de65226` for post-flash reset, true microsecond byte spacing,
+periodic scheduler sleeps and upload LED activity. The final small follow-up
+retains the updater's required precompiled-header include order.

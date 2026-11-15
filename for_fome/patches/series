@@ -5,3 +5,5 @@
 0005-g0-add-lowside-GPIO-and-local-PWM-setpoints.patch
 0006-g0-build-and-bundle-companion-firmware-with-verified.patch
 0007-g0-provision-BOOT0-option-bytes-before-first-firmwar.patch
+0008-g0-reset-after-upload-and-remove-per-byte-scheduler-.patch
+0009-g0-retain-precompiled-header-include-order-in-update.patch

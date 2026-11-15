@@ -1,0 +1,267 @@
+From c71048d40fb3df40d505de8e8341aa9c88f4be5b Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Sun, 15 Nov 2026 10:02:06 +0100
+Subject: [PATCH] g0: reset after upload and remove per-byte scheduler delays
+
+Use the realtime counter for the required ROM byte spacing and sleep every 32 bytes to keep lower-priority threads runnable. Show upload activity on the running LED while the normal LED callback is not yet started.
+
+After verified flashing, Go allows G071 startup to clear EMPTY before a BOOT0-low reset restores normal peripheral state. Check the application identity after reset. Keep factory provisioning and failed-update paths free of premature resets.
+---
+ firmware/CHANGELOG.md                         |  1 +
+ firmware/hw_layer/g0_extension/README.md      | 10 +++++-
+ .../g0_extension/tests/test_updater.cpp       | 30 ++++++++++++++--
+ .../g0_extension/tests/updater_mocks/pch.h    | 26 ++++++++++++--
+ firmware/hw_layer/g0_extension/updater.cpp    | 34 ++++++++++++++++---
+ 5 files changed, 91 insertions(+), 10 deletions(-)
+
+diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
+index 5815a0abee..2620d4f2a4 100644
+--- a/firmware/CHANGELOG.md
++++ b/firmware/CHANGELOG.md
+@@ -70,6 +70,7 @@ or
+  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
+ 
+ ### Fixed
++ - Reset G0 after firmware upload, avoid scheduler-tick delays per SPI byte, and show upload activity while yielding to other threads.
+  - Changing or clearing the MAP 2, MAF, MAF 2 or fuel level sensor input no longer leaves the sensor reading its old pin (and the pin claimed) until the ECU is rebooted. MAF and fuel level input changes now take effect immediately, like other analog sensors
+  - STM32F7 dual-bank ECUs no longer stall (potentially stopping the engine) when burning configuration with the engine running - configuration is now committed to flash when the engine is stopped #776
+  - SD card log field names now include their category prefix (e.g. `Boost: Target` instead of just `Target`), matching the names shown in TunerStudio
+diff --git a/firmware/hw_layer/g0_extension/README.md b/firmware/hw_layer/g0_extension/README.md
+index aaabbf64f2..e17803a2ff 100644
+--- a/firmware/hw_layer/g0_extension/README.md
++++ b/firmware/hw_layer/g0_extension/README.md
+@@ -66,7 +66,8 @@ accepted only when the readback proves the intended configuration was stored.
+ 
+ It then programs padded 256-byte blocks and reads every block back. BOOT0 is
+ lowered before the ROM Go command starts the application, avoiding dependence on
+-the latched EMPTY flag. The application protocol and image identity must match
++the latched EMPTY flag. After 100 ms of application startup, the updater pulses NRST with BOOT0 low to
++reset peripherals left configured by ROM. The application protocol and image identity must match
+ before runtime I/O is registered. Invalid vectors or images beyond G071 flash
+ bounds are rejected before changing hardware. Firmware identity is generated
+ from companion build inputs independently of the wire protocol version.
+@@ -97,3 +98,10 @@ ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/g0-tests --output-on-failure
+ Physical SPI timing/recovery, input latency, PWM resolution, BOOT option bytes,
+ reset wiring and interrupted programming still need bench verification. Nothing
+ in the host tests establishes those hardware properties.
++
++The ROM adapter uses a real 20 us byte gap rather than an RTOS microsecond sleep
++(which rounds to a scheduler tick on Atlas). It sleeps for 1 ms every 32 bytes
++and during ACK polling, allowing other runnable threads to execute. The running
++LED toggles during upload because the normal LED callback starts after hardware
++initialization. Startup still waits for a verified companion before registering
++remote pins; engine control is not started against an unready expansion.
+diff --git a/firmware/hw_layer/g0_extension/tests/test_updater.cpp b/firmware/hw_layer/g0_extension/tests/test_updater.cpp
+index b2f2545aec..9b066155e3 100644
+--- a/firmware/hw_layer/g0_extension/tests/test_updater.cpp
++++ b/firmware/hw_layer/g0_extension/tests/test_updater.cpp
+@@ -15,6 +15,9 @@ unsigned romBytes;
+ void palWritePad(unsigned, unsigned pin, bool high) {
+ 	if (pin == Gpio::B14 && testPinOutputs[pin] && !high) {
+ 		testResetPulses.push_back(Gpio::B14);
++		if (romBytes && !missingDevice && !appRunning) {
++			assert(rom->offset == rom->bytes.size()); // Never reset a factory ROM before Go.
++		}
+ 	}
+ 	if (pin == Gpio::B14 && !testPins[pin] && high) {
+ 		appRunning = hasApplication && !testPins[Gpio::B15];
+@@ -64,6 +67,8 @@ static void init(boot_test::Script& script, bool running) {
+ 	testPins[Gpio::B15] = false;
+ 	testPinOutputs[Gpio::B14] = testPinOutputs[Gpio::B15] = false;
+ 	testResetPulses.clear();
++	testWaited = testPolledUs = testShortSleeps = 0;
++	enginePins.runningLedPin.toggles = 0;
+ 	assert(!testSelected && !testStarted && !testBusLocked);
+ }
+ 
+@@ -82,7 +87,10 @@ int main() {
+ 	factory.go();
+ 	init(factory, false);
+ 	assert(g0::updateFirmware(spi, config, Gpio::B14, Gpio::B15));
+-	assert(testResetPulses.empty()); // No NRST pulse before provisioning, or after first programming.
++	assert(testResetPulses.size() == 1); // Reset after successful Go, never before factory provisioning.
++	assert(testPolledUs == romBytes * 20);
++	assert(testShortSleeps == romBytes / 32);
++	assert(testWaited < 1500); // No scheduler-tick delay per byte.
+ 	assert(factory.offset == factory.bytes.size() && appExchanges == 2);
+ 	finished();
+ 
+@@ -100,7 +108,7 @@ int main() {
+ 	init(older, true);
+ 	appVersion--;
+ 	assert(g0::updateFirmware(spi, config, Gpio::B14, Gpio::B15));
+-	assert(older.offset == older.bytes.size() && testResetPulses.size() == 2);
++	assert(older.offset == older.bytes.size() && testResetPulses.size() == 3);
+ 	finished();
+ 
+ 	boot_test::Script invalidOptions;
+@@ -116,6 +124,24 @@ int main() {
+ 	assert(!hasApplication);
+ 	finished();
+ 
++	boot_test::Script failedGo;
++	failedGo.connect();
++	failedGo.provision(boot_test::options(true));
++	failedGo.flash(g0_image::data, sizeof(g0_image::data));
++	failedGo.go();
++	failedGo.bytes.pop_back(); // Go address phase NACK: never reset into
++							   // unconfirmed startup.
++	failedGo.bytes.back().second = 0x1f;
++	init(failedGo, false);
++	romStartsApp = false;
++	assert(!g0::updateFirmware(spi, config, Gpio::B14, Gpio::B15));
++	assert(failedGo.offset == failedGo.bytes.size() && testResetPulses.empty());
++	finished();
++
++	g0::Transport transport(spi);
++	transport.sleepMs(250);
++	assert(enginePins.runningLedPin.toggles > 0);
++
+ 	boot_test::Script absent;
+ 	init(absent, false);
+ 	missingDevice = true;
+diff --git a/firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h b/firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h
+index 602fe957c0..ae619564ee 100644
+--- a/firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h
++++ b/firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h
+@@ -19,10 +19,31 @@ inline bool testSelected = false;
+ inline bool testBusLocked = false;
+ inline bool testStarted = false;
+ inline uint32_t testWaited = 0;
++inline unsigned testShortSleeps = 0;
+ inline void chThdSleepMilliseconds(uint32_t ms) {
+ 	testWaited += ms;
++	testShortSleeps += ms == 1;
+ }
+-inline void chThdSleepMicroseconds(uint32_t) {}
++inline uint32_t chVTGetSystemTimeX() {
++	return testWaited;
++}
++#define TIME_I2MS(ticks) (ticks)
++inline uint32_t testPolledUs = 0;
++constexpr uint32_t SystemCoreClock = 480000000;
++#define US2RTC(clock, us) ((clock) / 1000000 * (us))
++inline void chSysPolledDelayX(uint32_t cycles) {
++	testPolledUs += cycles / (SystemCoreClock / 1000000);
++}
++struct TestLed {
++	unsigned toggles = 0;
++	void toggle() {
++		toggles++;
++	}
++	void setValue(int) {}
++};
++inline struct {
++	TestLed runningLedPin;
++} enginePins;
+ inline void efiPrintf(const char*, ...) {}
+ inline unsigned getHwPort(const char*, Gpio) {
+ 	return 0;
+@@ -32,7 +53,8 @@ inline unsigned getHwPin(const char*, Gpio pin) {
+ }
+ void palWritePad(unsigned, unsigned pin, bool high);
+ inline void efiSetPadMode(const char*, Gpio pin, unsigned) {
+-	assert(testPins[pin]); // Preload both latches HIGH before enabling either output driver.
++	assert(testPins[pin]); // Preload both latches HIGH before enabling either
++						   // output driver.
+ 	testPinOutputs[pin] = true;
+ }
+ inline void spiAcquireBus(SPIDriver*) {
+diff --git a/firmware/hw_layer/g0_extension/updater.cpp b/firmware/hw_layer/g0_extension/updater.cpp
+index a078521256..ced97ff900 100644
+--- a/firmware/hw_layer/g0_extension/updater.cpp
++++ b/firmware/hw_layer/g0_extension/updater.cpp
+@@ -1,15 +1,24 @@
+-#include "pch.h"
+ #include "updater.h"
+ #include "bootloader.h"
+ #include "g0_firmware_image.h"
+ #include "link.h"
+ #include "mpu_util.h"
++#include "pch.h"
+ 
+ namespace g0 {
+ namespace {
+ NO_CACHE wire::AppFrame tx;
+ NO_CACHE wire::AppFrame rx;
+ 
++void heartbeat() {
++	static uint32_t previous = 0;
++	const uint32_t now = TIME_I2MS(chVTGetSystemTimeX());
++	if (now - previous >= 250) {
++		enginePins.runningLedPin.toggle();
++		previous = now;
++	}
++}
++
+ void pin(brain_pin_e line, bool high) {
+ 	palWritePad(getHwPort("G0", line), getHwPin("G0", line), high);
+ }
+@@ -49,11 +58,17 @@ public:
+ 	uint8_t byte(uint8_t value) override {
+ 		tx.bytes[0] = value;
+ 		spiExchange(&m_spi, 1, tx.bytes, rx.bytes);
+-		chThdSleepMicroseconds(20);
++		// RTOS microsecond sleeps round up to a millisecond on Atlas.
++		chSysPolledDelayX(US2RTC(SystemCoreClock, 20));
++		if (++m_bytes == 32) {
++			m_bytes = 0;
++			sleepMs(1); // Let lower-priority threads run even during long data packets.
++		}
+ 		return rx.bytes[0];
+ 	}
+ 	void sleepMs(uint32_t delay) override {
+ 		chThdSleepMilliseconds(delay);
++		heartbeat();
+ 	}
+ 	void reconnect() override {
+ 		spiUnselect(&m_spi);
+@@ -63,6 +78,7 @@ public:
+ 
+ private:
+ 	SPIDriver& m_spi;
++	unsigned m_bytes = 0;
+ };
+ } // namespace
+ 
+@@ -71,7 +87,8 @@ bool updateFirmware(SPIDriver& spi, const SPIConfig& spiSettings, brain_pin_e re
+ 	if (!Bootloader::validImage(g0_image::data, sizeof(g0_image::data))) {
+ 		return false;
+ 	}
+-	// Preserve the factory ROM session: NRST must never briefly go low during GPIO setup.
++	// Preserve the factory ROM session: NRST must never briefly go low during
++	// GPIO setup.
+ 	pin(resetPin, true);
+ 	pin(bootPin, true);
+ 	efiSetPadMode("G0 BOOT", bootPin, PAL_MODE_OUTPUT_PUSHPULL);
+@@ -98,11 +115,17 @@ bool updateFirmware(SPIDriver& spi, const SPIConfig& spiSettings, brain_pin_e re
+ 		efiPrintf("G0: provisioning and programming bundled firmware");
+ 		ok = loader.flash(g0_image::data, sizeof(g0_image::data));
+ 		pin(bootPin, false);
+-		// Go bypasses the latched EMPTY flag on first programming, including older ROMs.
++		// Go bypasses the latched EMPTY flag on first programming, including older
++		// ROMs.
+ 		ok = ok && loader.go();
+ 		spiUnselect(&spi);
+ 		chThdSleepMilliseconds(100);
+-		ok = ok && versionMatches(spi);
++		if (ok) {
++			// Go lets G071 startup clear EMPTY; then reset peripherals out of ROM
++			// state.
++			reset(resetPin, bootPin, false);
++			ok = versionMatches(spi);
++		}
+ 	}
+ 	spiUnselect(&spi);
+ 	spiStop(&spi);
+@@ -110,6 +133,7 @@ bool updateFirmware(SPIDriver& spi, const SPIConfig& spiSettings, brain_pin_e re
+ 	// Retain ownership: these are dedicated expansion control pins.
+ 	pin(bootPin, false);
+ 	pin(resetPin, true);
++	enginePins.runningLedPin.setValue(0);
+ 	efiPrintf("G0 firmware %s", ok ? "ready" : "failed");
+ 	return ok;
+ }
+-- 
+2.53.0
+
