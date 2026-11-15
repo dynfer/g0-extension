@@ -1,0 +1,322 @@
+From 03800b69d665850b769146d2e02440acaf934699 Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Sun, 15 Nov 2026 12:42:07 +0100
+Subject: [PATCH] g0: pause PWM for stopped frequencies and follow global
+ enable
+
+Treat NaN and nonnegative sub-1 Hz frequencies as paused PWM, retain duty for resume and honor logical inactive polarity. Keep negative, infinite and over-range frequencies invalid. Route initial G0 pause values before the generic low-frequency rejection.
+
+Reapply active PWM setpoints against the engine PWM enable flag before each background SPI frame. This propagates disable/restore without requiring another controller callback and leaves static GPIO independent. Cover paused startup, inversion, disabled updates, late startup and deinitialization in adapter regressions.
+---
+ firmware/CHANGELOG.md                         |  1 +
+ .../system/timer/pwm_generator_logic.cpp      | 10 +--
+ firmware/hw_layer/g0_extension/README.md      |  7 +-
+ .../hw_layer/g0_extension/output_gpio.cpp     | 34 +++++--
+ firmware/hw_layer/g0_extension/output_gpio.h  |  1 +
+ firmware/hw_layer/g0_extension/service.cpp    |  2 +
+ .../hw_layer/g0_extension/tests/mocks/pch.h   |  6 ++
+ .../g0_extension/tests/test_output_gpio.cpp   | 89 +++++++++++++++----
+ 8 files changed, 117 insertions(+), 33 deletions(-)
+
+diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
+index cdb9a92e0c..80573a035c 100644
+--- a/firmware/CHANGELOG.md
++++ b/firmware/CHANGELOG.md
+@@ -70,6 +70,7 @@ or
+  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
+ 
+ ### Fixed
++ - G0 PWM accepts paused frequency values used by tachometer/speedometer outputs and follows the global PWM enable setting.
+  - Keep configured SPI5 thermocouples deselected during G0 initialization and firmware upload on Atlas.
+  - Reset G0 after firmware upload, avoid scheduler-tick delays per SPI byte, and show upload activity while yielding to other threads.
+  - Changing or clearing the MAP 2, MAF, MAF 2 or fuel level sensor input no longer leaves the sensor reading its old pin (and the pin claimed) until the ECU is rebooted. MAF and fuel level input changes now take effect immediately, like other analog sensors
+diff --git a/firmware/controllers/system/timer/pwm_generator_logic.cpp b/firmware/controllers/system/timer/pwm_generator_logic.cpp
+index d0481a4fe1..0aecef4e53 100644
+--- a/firmware/controllers/system/timer/pwm_generator_logic.cpp
++++ b/firmware/controllers/system/timer/pwm_generator_logic.cpp
+@@ -328,11 +328,6 @@ void PwmConfig::weComplexInit(
+ void startSimplePwm(SimplePwm* state, const char* msg, OutputPin* output, float frequency, float dutyCycle) {
+ 	efiAssertVoid(ObdCode::CUSTOM_ERR_PWM_STATE_ASSERT, state != NULL, "state");
+ 	efiAssertVoid(ObdCode::CUSTOM_ERR_PWM_DUTY_ASSERT, dutyCycle >= 0 && dutyCycle <= 1, "dutyCycle");
+-	if (frequency < 1) {
+-		warning(ObdCode::OBD_PCM_Processor_Fault, "low frequency %.2f %s", frequency, msg);
+-		return;
+-	}
+-
+ 	// Let the expansion MCU generate edges locally; SPI only carries setpoints.
+ #if EFI_G0_EXTENSION
+ 	if (g0::isOutput(output->m_brainPin)) {
+@@ -349,6 +344,11 @@ void startSimplePwm(SimplePwm* state, const char* msg, OutputPin* output, float
+ 	state->hardPwm = nullptr;
+ #endif
+ 
++	if (frequency < 1) {
++		warning(ObdCode::OBD_PCM_Processor_Fault, "low frequency %.2f %s", frequency, msg);
++		return;
++	}
++
+ 	state->seq.setSwitchTime(0, dutyCycle);
+ 	state->seq.setSwitchTime(1, 1);
+ 	state->seq.setChannelState(0, 0, false);
+diff --git a/firmware/hw_layer/g0_extension/README.md b/firmware/hw_layer/g0_extension/README.md
+index db413947ba..f3bbbc8da6 100644
+--- a/firmware/hw_layer/g0_extension/README.md
++++ b/firmware/hw_layer/g0_extension/README.md
+@@ -31,7 +31,12 @@ SENT is unsupported.
+ Outputs start off. Callers queue setpoints, and only a matching acknowledgement
+ clears them; changes while an ACK is in flight stay pending. Setpoints refresh
+ every second and after reconnect. `SimplePwm` supports duty, frequency and
+-inversion, including Lua frequency changes. Deinitializing a pin turns it off.
++inversion, including Lua frequency changes. Zero, sub-1 Hz and NaN frequencies
++pause PWM at its logical inactive level, retaining duty for the next valid
++frequency. Negative, infinite and over-500 Hz frequencies remain invalid.
++The worker applies FOME's global PWM enable state on every poll, including when
++no controller update occurs; re-enabling restores the latest active PWM setpoints.
++Static GPIO outputs are independent of that flag. Deinitializing a pin turns it off.
+ The companion preserves PWM cycles during duty updates and disables outputs after
+ 500 ms without a checksum-valid frame. These outputs are for asynchronous
+ auxiliary loads: they cannot follow crank/cam timing through SPI.
+diff --git a/firmware/hw_layer/g0_extension/output_gpio.cpp b/firmware/hw_layer/g0_extension/output_gpio.cpp
+index 8f7978a1e5..3990c74abb 100644
+--- a/firmware/hw_layer/g0_extension/output_gpio.cpp
++++ b/firmware/hw_layer/g0_extension/output_gpio.cpp
+@@ -9,6 +9,10 @@
+ namespace g0 {
+ namespace {
+ LockedModule<Outputs> outputs;
++
++bool validFrequency(float value) {
++	return std::isnan(value) || (std::isfinite(value) && value >= 0 && value <= 500);
++}
+ class Pwm final : public hardware_pwm {
+ public:
+ 	size_t index = 0;
+@@ -22,19 +26,25 @@ public:
+ 			return;
+ 		}
+ 		duty = value;
+-		outputs.state.set(index, frequency, uint16_t((inverted ? 1 - duty : duty) * wire::outputDutyMax + 0.5f));
++		apply();
+ 	}
+ 	void setFrequency(float value) override {
+ 		chibios_rt::CriticalSectionLocker lock;
+ 		if (!active) {
+ 			return;
+ 		}
+-		if (!std::isfinite(value) || value < 1 || value > 500) {
++		if (!validFrequency(value)) {
+ 			warning(ObdCode::CUSTOM_ERR_PWM_STATE_ASSERT, "G0 PWM range (1..500 Hz)");
+ 			return;
+ 		}
+-		frequency = uint32_t(value + 0.5f);
+-		setDuty(duty);
++		frequency = std::isnan(value) || value < 1 ? 0 : uint32_t(value + 0.5f);
++		apply();
++	}
++	void apply() {
++		const bool running = engine->isPwmEnabled && frequency != 0;
++		const float value = running ? duty : 0;
++		outputs.state.set(
++				index, running ? frequency : 0, uint16_t((inverted ? 1 - value : value) * wire::outputDutyMax + 0.5f));
+ 	}
+ };
+ Pwm pwms[wire::outputCount];
+@@ -70,20 +80,28 @@ bool isOutput(brain_pin_e pin) {
+ }
+ 
+ hardware_pwm* startPwm(brain_pin_e pin, float frequency, float duty, bool inverted) {
+-	if (!isOutput(pin) || !std::isfinite(frequency) || frequency < 1 || frequency > 500 || !std::isfinite(duty) ||
+-		duty < 0 || duty > 1) {
++	if (!isOutput(pin) || !validFrequency(frequency) || !std::isfinite(duty) || duty < 0 || duty > 1) {
+ 		return nullptr;
+ 	}
+ 	chibios_rt::CriticalSectionLocker lock;
+ 	auto& pwm = pwms[pin - Gpio::G0_OUT_1];
+ 	pwm.index = pin - Gpio::G0_OUT_1;
+-	pwm.frequency = uint32_t(frequency + 0.5f);
+ 	pwm.active = true;
+ 	pwm.inverted = inverted;
+-	pwm.setDuty(duty);
++	pwm.duty = duty;
++	pwm.setFrequency(frequency);
+ 	return &pwm;
+ }
+ 
++void updatePwmOutputs() {
++	chibios_rt::CriticalSectionLocker lock;
++	for (auto& pwm : pwms) {
++		if (pwm.active) {
++			pwm.apply();
++		}
++	}
++}
++
+ void registerOutputs() {
+ 	efiAssertVoid(
+ 			ObdCode::CUSTOM_ERR_ASSERT,
+diff --git a/firmware/hw_layer/g0_extension/output_gpio.h b/firmware/hw_layer/g0_extension/output_gpio.h
+index f5d82442e0..cdc3ad1a20 100644
+--- a/firmware/hw_layer/g0_extension/output_gpio.h
++++ b/firmware/hw_layer/g0_extension/output_gpio.h
+@@ -3,6 +3,7 @@
+ struct hardware_pwm;
+ namespace g0 {
+ void registerOutputs();
++void updatePwmOutputs();
+ bool isOutput(brain_pin_e pin);
+ hardware_pwm* startPwm(brain_pin_e pin, float frequency, float duty, bool inverted);
+ } // namespace g0
+diff --git a/firmware/hw_layer/g0_extension/service.cpp b/firmware/hw_layer/g0_extension/service.cpp
+index c301357833..c887255ba1 100644
+--- a/firmware/hw_layer/g0_extension/service.cpp
++++ b/firmware/hw_layer/g0_extension/service.cpp
+@@ -1,5 +1,6 @@
+ #include "pch.h"
+ #include "service.h"
++#include "output_gpio.h"
+ #include "spi_thread.h"
+ #include "mpu_util.h"
+ 
+@@ -24,6 +25,7 @@ public:
+ 		return 10;
+ 	}
+ 	void performTransfer(SPIDriver& spi) override {
++		updatePwmOutputs();
+ 		instance.prepare(txBuffer, nowMs());
+ 		rxBuffer = {};
+ 		spiSelect(&spi);
+diff --git a/firmware/hw_layer/g0_extension/tests/mocks/pch.h b/firmware/hw_layer/g0_extension/tests/mocks/pch.h
+index 35d70b590f..d8ef7543ca 100644
+--- a/firmware/hw_layer/g0_extension/tests/mocks/pch.h
++++ b/firmware/hw_layer/g0_extension/tests/mocks/pch.h
+@@ -36,3 +36,9 @@ struct CriticalSectionLocker {
+ 	}
+ };
+ } // namespace chibios_rt
++
++struct TestEngine {
++	bool isPwmEnabled = true;
++};
++inline TestEngine testEngine;
++inline auto* engine = &testEngine;
+diff --git a/firmware/hw_layer/g0_extension/tests/test_output_gpio.cpp b/firmware/hw_layer/g0_extension/tests/test_output_gpio.cpp
+index a75b28320f..34bb0bdf01 100644
+--- a/firmware/hw_layer/g0_extension/tests/test_output_gpio.cpp
++++ b/firmware/hw_layer/g0_extension/tests/test_output_gpio.cpp
+@@ -1,4 +1,5 @@
+ #include "../output_gpio.cpp"
++#include <array>
+ #include <initializer_list>
+ #include <limits>
+ 
+@@ -9,38 +10,88 @@ Link& link() {
+ }
+ } // namespace g0
+ 
++static std::array<g0::wire::SetOutputRequest, g0::wire::outputCount> applied;
++
++static void exchange() {
++	g0::wire::AppFrame tx = {};
++	unsigned count = 0;
++	while (g0::outputs.state.request(tx, 10)) {
++		assert(++count <= g0::wire::outputCount);
++		const auto& sent = tx.setOutputRequest;
++		applied[sent.output - 1] = sent;
++		g0::wire::AppFrame rx = {};
++		rx.outputResponse.frequencyHz = sent.frequencyHz;
++		rx.outputResponse.duty = sent.duty;
++		g0::outputs.state.response(tx, rx, 10);
++	}
++}
++
++static void expect(size_t index, uint32_t frequency, uint16_t duty) {
++	exchange();
++	assert(applied[index].frequencyHz == frequency && applied[index].duty == duty);
++}
++
+ int main() {
+ 	using namespace g0;
+ 	registerOutputs();
++	const float nan = std::numeric_limits<float>::quiet_NaN();
++	const float inf = std::numeric_limits<float>::infinity();
+ 	assert(!startPwm(Gpio::G0_OUT_1, 501, 0.5f, false));
++	assert(!startPwm(Gpio::G0_OUT_1, -1, 0.5f, false));
++	assert(!startPwm(Gpio::G0_OUT_1, inf, 0.5f, false));
+ 	auto* pwm = startPwm(Gpio::G0_OUT_1, 100, 0.25f, true);
+ 	assert(pwm);
+ 	pwm->setFrequency(200);
+-	wire::AppFrame tx = {};
+-	assert(outputs.state.request(tx, 0));
+-	assert(tx.setOutputRequest.output == 1);
+-	assert(tx.setOutputRequest.frequencyHz == 200);
+-	assert(tx.setOutputRequest.duty == 7500);
++	expect(0, 200, 7500);
+ 	pwm->setDuty(0.6f);
+-	assert(pwms[0].duty == 0.6f && pwms[0].frequency == 200);
+-	for (float invalid : {0.0f, 501.0f, std::numeric_limits<float>::quiet_NaN()}) {
++	expect(0, 200, 4000);
++	for (float invalid : {-1.0f, 501.0f, inf, -inf}) {
+ 		pwm->setFrequency(invalid);
+ 		assert(pwms[0].frequency == 200);
+ 	}
+-	assert(testWarnings == 3);
+-	assert(testOutputChip->setPadMode(0, 0) == 0);
+-	assert(!pwms[0].active);
++	assert(testWarnings == 4);
++	for (float paused : {0.0f, 0.5f, nan}) {
++		pwm->setFrequency(paused);
++		expect(0, 0, 10000); // Logical inactive level honors inversion.
++		pwm->setDuty(0.25f);
++		expect(0, 0, 10000);
++		pwm->setFrequency(200);
++		expect(0, 200, 7500);
++	}
++
++	// Tachometer/speedometer initialization starts paused, then receives frequency.
++	auto* tach = startPwm(Gpio::G0_OUT_2, nan, 0.5f, false);
++	assert(tach);
++	expect(1, 0, 0);
++	tach->setFrequency(100);
++	expect(1, 100, 5000);
++
++	assert(testOutputChip->writePad(2, 1) == 0);
++	expect(2, 0, 10000);
++	engine->isPwmEnabled = false;
++	updatePwmOutputs(); // Worker must propagate disable without another controller call.
++	expect(0, 0, 10000);
++	expect(1, 0, 0);
++	expect(2, 0, 10000); // Static GPIO is independent of PWM enable.
++	pwm->setDuty(0.8f);
+ 	pwm->setFrequency(300);
++	expect(0, 0, 10000);
++	auto* later = startPwm(Gpio::G0_OUT_4, 50, 0.2f, false);
++	assert(later);
++	expect(3, 0, 0);
++	assert(testOutputChip->setPadMode(1, 0) == 0);
++	engine->isPwmEnabled = true;
++	updatePwmOutputs();
++	expect(0, 300, 2000);
++	expect(1, 0, 0); // Deinitialized PWM must not be restored.
++	expect(3, 50, 2000);
++
++	assert(testOutputChip->setPadMode(0, 0) == 0);
++	pwm->setFrequency(400);
+ 	pwm->setDuty(1);
+-	assert(!pwms[0].active && pwms[0].frequency == 200);
++	updatePwmOutputs();
+ 	outputs.state.disconnected();
+-	assert(outputs.state.request(tx, 10));
+-	// The scheduler rotates; inspect the disabled channel after startup commands.
+-	for (unsigned i = 0; tx.indexedRequest.index != 1 && i < wire::outputCount; i++) {
+-		outputs.state.response(tx, {}, 10);
+-		assert(outputs.state.request(tx, 10));
+-	}
+-	assert(tx.indexedRequest.index == 1 && tx.bytes[0] == wire::cmdSetOutput);
+-	assert(tx.setOutputRequest.frequencyHz == 0 && tx.setOutputRequest.duty == 0);
++	expect(0, 0, 0);
++	assert(!pwms[0].active && pwms[0].frequency == 300);
+ 	assert(chibios_rt::CriticalSectionLocker::depth == 0);
+ }
+-- 
+2.53.0
+

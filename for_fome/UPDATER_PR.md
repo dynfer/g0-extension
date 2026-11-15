@@ -24,7 +24,7 @@ image dependency; `G0_EXTENSION=no` disables the expansion.
 Validation: sanitizer-enabled protocol, output, bootloader and production-updater
 tests; Python image/identity tests; actual G0 slave regressions; and a clean Atlas
 bootloader/application build. The packaged image contains all 12,060 companion
-bytes in readonly storage. All ten exported patches apply cleanly to the
+bytes in readonly storage. All eleven exported patches apply cleanly to the
 recorded upstream base and reproduce the branch tree.
 
 Bench verification of option programming, SPI timing and interrupted updates
@@ -43,3 +43,11 @@ Atlas deselects configured local MAX31855 CS pins on SPI5 before G0 initializati
 including when thermocouple polling is disabled. It preloads each latch high
 before enabling its output driver and leaves ownership to the later thermocouple
 driver initialization. Follow-up: `4bc718d70d`.
+
+G0 PWM accepts the stopped frequency values used by tachometer/speedometer
+controllers, holds the logical inactive level while paused, and resumes with
+retained duty. Active PWM follows FOME's global enable flag on each SPI poll,
+including when its controller makes no further calls. Setpoint changes while
+disabled are retained for restoration; deinitialized channels stay off and static
+GPIO remains independent. Follow-up: `03800b69d6`. Disable takes effect through
+the normal SPI scheduling path.

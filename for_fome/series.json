@@ -60,16 +60,23 @@
       "branch": "codex/g0-v9-06-updater",
       "commit": "4bc718d70d23d1360bda7a45f8dc40d9a94ee62e",
       "title": "g0: deselect configured SPI5 thermocouples before initialization"
+    },
+    {
+      "part": 6,
+      "branch": "codex/g0-v9-06-updater",
+      "commit": "03800b69d665850b769146d2e02440acaf934699",
+      "title": "g0: pause PWM for stopped frequencies and follow global enable"
     }
   ],
   "published_updater_branch": {
     "branch": "codex/g0-v9-06-updater",
     "base": "52aec6335fb4abe37b7257f32132e89f046019ea",
-    "tip": "4bc718d70d23d1360bda7a45f8dc40d9a94ee62e"
+    "tip": "03800b69d665850b769146d2e02440acaf934699"
   },
   "companion_revision": "5fdddd58c64ee41bbe68ac9801b7139ec0e3ebbc",
   "protocol_version": 9,
   "provisioning_snapshot_branch": "codex/g0-option-provisioning",
   "upload_fixes_branch": "codex/g0-upload-fixes",
-  "spi5_chip_selects_branch": "codex/g0-spi5-chip-selects"
+  "spi5_chip_selects_branch": "codex/g0-spi5-chip-selects",
+  "pwm_fixes_branch": "codex/g0-pwm-fixes"
 }

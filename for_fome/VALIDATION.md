@@ -92,3 +92,21 @@ SPI5 chip-select follow-up validated on 2026-11-15:
 
 External CS pull-ups still protect the period before firmware can read the
 configuration. Shared physical SPI operation has not been bench-tested.
+
+PWM compatibility follow-up validated on 2026-11-15:
+
+- All four FOME CTest groups and both G0 slave/identity groups pass with the
+  existing sanitizer-enabled test script.
+- Adapter regressions cover NaN initialization, zero/sub-1 Hz/NaN pause and resume,
+  inverted inactive levels, invalid frequency rejection, and retained duty.
+- Global disable is tested without a subsequent controller callback, alongside
+  updates and new PWM startup while disabled, restore, static GPIO independence,
+  and deinitialization while disabled. The tests inspect actual queued wire
+  requests and acknowledge the commands.
+- The Atlas board script builds and packages OpenBLT and the main application.
+- The eleventh patch applies with `git am --whitespace=error` after the previously
+  verified ten patches; the final tree and module mirror match the PWM branch.
+
+The G0 image/protocol are unchanged. PWM disable follows the asynchronous SPI
+schedule. Physical PWM timing, inactive polarity and watchdog behavior still
+require bench verification; no hardware was flashed.

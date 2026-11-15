@@ -6,11 +6,12 @@ included in the module that owns them.
 [UPDATER_PR.md](UPDATER_PR.md) contains the updated description for the updater PR.
 [series.json](series.json) records the exact commits and pinned G0 source.
 The source mirror in [modules](modules/) matches the final branch, and
-[patches/series](patches/series) lists the ten patches in merge order. The
+[patches/series](patches/series) lists the eleven patches in merge order. The
 seventh patch adds factory BOOT0 provisioning to the updater module; the eighth
 adds the post-flash reset, faster byte spacing and cooperative upload progress.
 The ninth retains the required precompiled-header include order. The tenth
-deselects configured SPI5 thermocouples before G0 initialization.
+deselects configured SPI5 thermocouples before G0 initialization. The eleventh
+fixes paused PWM frequencies and the global PWM enable behavior.
 
 | Part | Scope |
 | --- | --- |

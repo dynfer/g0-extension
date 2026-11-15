@@ -8,3 +8,4 @@
 0008-g0-reset-after-upload-and-remove-per-byte-scheduler-.patch
 0009-g0-retain-precompiled-header-include-order-in-update.patch
 0010-g0-deselect-configured-SPI5-thermocouples-before-ini.patch
+0011-g0-pause-PWM-for-stopped-frequencies-and-follow-glob.patch
