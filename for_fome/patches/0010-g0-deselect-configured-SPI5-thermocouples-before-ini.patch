@@ -1,0 +1,65 @@
+From 4bc718d70d23d1360bda7a45f8dc40d9a94ee62e Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Sun, 15 Nov 2026 10:35:55 +0100
+Subject: [PATCH] g0: deselect configured SPI5 thermocouples before
+ initialization
+
+Preload configured local MAX31855 CS latches high before enabling their GPIO drivers and before any G0 SPI activity. Leave ownership acquisition to the later thermocouple initialization. Skip other buses and unassigned or remote GPIO pins.
+---
+ firmware/CHANGELOG.md                                |  1 +
+ firmware/config/boards/atlas/board_configuration.cpp | 11 +++++++++++
+ firmware/hw_layer/g0_extension/README.md             |  7 +++++++
+ 3 files changed, 19 insertions(+)
+
+diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
+index 2620d4f2a4..cdb9a92e0c 100644
+--- a/firmware/CHANGELOG.md
++++ b/firmware/CHANGELOG.md
+@@ -70,6 +70,7 @@ or
+  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
+ 
+ ### Fixed
++ - Keep configured SPI5 thermocouples deselected during G0 initialization and firmware upload on Atlas.
+  - Reset G0 after firmware upload, avoid scheduler-tick delays per SPI byte, and show upload activity while yielding to other threads.
+  - Changing or clearing the MAP 2, MAF, MAF 2 or fuel level sensor input no longer leaves the sensor reading its old pin (and the pin claimed) until the ECU is rebooted. MAF and fuel level input changes now take effect immediately, like other analog sensors
+  - STM32F7 dual-bank ECUs no longer stall (potentially stopping the engine) when burning configuration with the engine running - configuration is now committed to flash when the engine is stopped #776
+diff --git a/firmware/config/boards/atlas/board_configuration.cpp b/firmware/config/boards/atlas/board_configuration.cpp
+index f8a547835b..5df207c73a 100644
+--- a/firmware/config/boards/atlas/board_configuration.cpp
++++ b/firmware/config/boards/atlas/board_configuration.cpp
+@@ -13,6 +13,17 @@
+ #include "mpu_util.h"
+ 
+ void initG0Extension() {
++#if EFI_MAX_31855
++	if (engineConfiguration->max31855spiDevice == SPI_DEVICE_5) {
++		for (auto cs : engineConfiguration->max31855_cs) {
++			if (isBrainPinValid(cs) && brain_pin_is_onchip(cs)) {
++				palSetPad(getHwPort("MAX31855 CS", cs), getHwPin("MAX31855 CS", cs));
++				// The thermocouple driver claims these pins later in initMax31855().
++				efiSetPadModeWithoutOwnershipAcquisition("MAX31855 CS", cs, PAL_STM32_MODE_OUTPUT);
++			}
++		}
++	}
++#endif
+ 	turnOnSpi(SPI_DEVICE_5);
+ 	SPIConfig g0SpiConfig = {};
+ 	g0SpiConfig.cfg1 = 7 | SPI_CFG1_MBR_2 | SPI_CFG1_MBR_1 | SPI_CFG1_MBR_0;
+diff --git a/firmware/hw_layer/g0_extension/README.md b/firmware/hw_layer/g0_extension/README.md
+index e17803a2ff..db413947ba 100644
+--- a/firmware/hw_layer/g0_extension/README.md
++++ b/firmware/hw_layer/g0_extension/README.md
+@@ -105,3 +105,10 @@ and during ACK polling, allowing other runnable threads to execute. The running
+ LED toggles during upload because the normal LED callback starts after hardware
+ initialization. Startup still waits for a verified companion before registering
+ remote pins; engine control is not started against an unready expansion.
++
++Before initializing the G0, Atlas drives all configured on-chip MAX31855 chip
++selects HIGH when the thermocouples are assigned to SPI5. The output latch is
++set before enabling the driver, and pin ownership remains with the later
++thermocouple initialization. This also applies when thermocouple polling is
++disabled. Unassigned pins and expansion GPIO pins are skipped; thermocouple CS
++must use local GPIO for this startup protection.
+-- 
+2.53.0
+

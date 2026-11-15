@@ -7,3 +7,4 @@
 0007-g0-provision-BOOT0-option-bytes-before-first-firmwar.patch
 0008-g0-reset-after-upload-and-remove-per-byte-scheduler-.patch
 0009-g0-retain-precompiled-header-include-order-in-update.patch
+0010-g0-deselect-configured-SPI5-thermocouples-before-ini.patch

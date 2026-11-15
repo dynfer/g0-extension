@@ -78,3 +78,17 @@ reducing ST's required minimum gap. Actual transfer duration and concurrent-thre
 behavior still require a bench retest. The normal LED callback starts after
 hardware initialization; upload supplies its own running-LED activity. Startup
 still waits for verified remote I/O. No hardware was flashed during these checks.
+
+SPI5 chip-select follow-up validated on 2026-11-15:
+
+- A temporary C++ assert harness executed the actual CS preparation block with
+  empty configuration, another SPI bus, multiple valid CS pins, an unassigned pin
+  and an expansion GPIO pin. It checked that each output latch was HIGH before
+  enabling its driver and that only the selected local SPI5 CS pins were touched.
+- All four standalone sanitizer-enabled CTest groups passed.
+- The Atlas bootloader/application board build and packaging passed.
+- The tenth patch applied with `git am --whitespace=error` after the previously
+  verified nine patches; its final tree and module mirror match the branch.
+
+External CS pull-ups still protect the period before firmware can read the
+configuration. Shared physical SPI operation has not been bench-tested.

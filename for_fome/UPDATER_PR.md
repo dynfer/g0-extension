@@ -24,7 +24,7 @@ image dependency; `G0_EXTENSION=no` disables the expansion.
 Validation: sanitizer-enabled protocol, output, bootloader and production-updater
 tests; Python image/identity tests; actual G0 slave regressions; and a clean Atlas
 bootloader/application build. The packaged image contains all 12,060 companion
-bytes in readonly storage. All nine exported patches apply cleanly to the
+bytes in readonly storage. All ten exported patches apply cleanly to the
 recorded upstream base and reproduce the branch tree.
 
 Bench verification of option programming, SPI timing and interrupted updates
@@ -38,3 +38,8 @@ Head: `codex/g0-v9-06-updater`.
 Factory-provisioning follow-up: `e37de65226`, based on `0cb6472e53`.
 
 Upload/reset follow-up tip: `06ea4d7ec5` (review against `e37de65226`).
+
+Atlas deselects configured local MAX31855 CS pins on SPI5 before G0 initialization,
+including when thermocouple polling is disabled. It preloads each latch high
+before enabling its output driver and leaves ownership to the later thermocouple
+driver initialization. Follow-up: `4bc718d70d`.
