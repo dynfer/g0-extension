@@ -66,17 +66,24 @@
       "branch": "codex/g0-v9-06-updater",
       "commit": "03800b69d665850b769146d2e02440acaf934699",
       "title": "g0: pause PWM for stopped frequencies and follow global enable"
+    },
+    {
+      "part": 6,
+      "branch": "codex/g0-v9-06-updater",
+      "commit": "020223048face4e653269fff4a709c161257d4c1",
+      "title": "g0: release BOOT0 after initialization for SWD access"
     }
   ],
   "published_updater_branch": {
     "branch": "codex/g0-v9-06-updater",
     "base": "52aec6335fb4abe37b7257f32132e89f046019ea",
-    "tip": "03800b69d665850b769146d2e02440acaf934699"
+    "tip": "020223048face4e653269fff4a709c161257d4c1"
   },
   "companion_revision": "5fdddd58c64ee41bbe68ac9801b7139ec0e3ebbc",
   "protocol_version": 9,
   "provisioning_snapshot_branch": "codex/g0-option-provisioning",
   "upload_fixes_branch": "codex/g0-upload-fixes",
   "spi5_chip_selects_branch": "codex/g0-spi5-chip-selects",
-  "pwm_fixes_branch": "codex/g0-pwm-fixes"
+  "pwm_fixes_branch": "codex/g0-pwm-fixes",
+  "boot_release_branch": "codex/g0-boot-release"
 }

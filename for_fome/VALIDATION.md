@@ -110,3 +110,21 @@ PWM compatibility follow-up validated on 2026-11-15:
 The G0 image/protocol are unchanged. PWM disable follows the asynchronous SPI
 schedule. Physical PWM timing, inactive polarity and watchdog behavior still
 require bench verification; no hardware was flashed.
+
+BOOT0/SWCLK release follow-up validated on 2026-11-18:
+
+- All four FOME CTest groups and both G0 slave/identity groups passed through
+  the sanitizer-enabled test script.
+- Updater regressions require BOOT0 to remain driven during reset selection
+  and all SPI exchanges. Factory upload, matching app, older app, invalid options,
+  failed Go and absent-device paths all require it to finish as input/pull-down
+  after SPI is stopped/released. NRST remains driven HIGH as before.
+- A fresh isolated Atlas bootloader/application build and image packaging passed.
+- All twelve exported patches applied from the recorded upstream base using
+  `git am --whitespace=error`; their final tree and the module mirror match.
+
+The earlier live diagnosis confirmed that releasing H7 PB15 allows G0 SWD access
+while H7 runs. This newly built firmware was not flashed. The isolated build uses
+the published protocol-9 stack; the user's local protocol-10 and debug edits are
+preserved when applying the source fix to the working checkout. No option bytes
+or NRST behavior were changed.

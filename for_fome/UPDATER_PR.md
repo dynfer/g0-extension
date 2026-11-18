@@ -24,7 +24,7 @@ image dependency; `G0_EXTENSION=no` disables the expansion.
 Validation: sanitizer-enabled protocol, output, bootloader and production-updater
 tests; Python image/identity tests; actual G0 slave regressions; and a clean Atlas
 bootloader/application build. The packaged image contains all 12,060 companion
-bytes in readonly storage. All eleven exported patches apply cleanly to the
+bytes in readonly storage. All twelve exported patches apply cleanly to the
 recorded upstream base and reproduce the branch tree.
 
 Bench verification of option programming, SPI timing and interrupted updates
@@ -51,3 +51,8 @@ including when its controller makes no further calls. Setpoint changes while
 disabled are retained for restoration; deinitialized channels stay off and static
 GPIO remains independent. Follow-up: `03800b69d6`. Disable takes effect through
 the normal SPI scheduling path.
+
+After initialization, the updater releases BOOT0 as an input with weak pull-down
+on success and failure. STM32G071 BOOT0 shares PA14/SWCLK; retaining the former
+push-pull LOW blocked G0 debug attachment while H7 ran. Boot selection stays driven
+during reset and ROM transfers. Follow-up: `020223048f`.

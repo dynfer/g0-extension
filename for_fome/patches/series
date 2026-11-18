@@ -9,3 +9,4 @@
 0009-g0-retain-precompiled-header-include-order-in-update.patch
 0010-g0-deselect-configured-SPI5-thermocouples-before-ini.patch
 0011-g0-pause-PWM-for-stopped-frequencies-and-follow-glob.patch
+0012-g0-release-BOOT0-after-initialization-for-SWD-access.patch
