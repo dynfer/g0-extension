@@ -10,7 +10,7 @@ follow-up commit for factory BOOT0 provisioning.
 | 3 | [codex/g0-v9-03-adc](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-03-adc) | `ea0e3babbf` | `codex/g0-v9-02-spi-transport` |
 | 4 | [codex/g0-v9-04-digital-inputs](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-04-digital-inputs) | `4cd04606e8` | `codex/g0-v9-03-adc` |
 | 5 | [codex/g0-v9-05-outputs](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-05-outputs) | `52aec6335f` | `codex/g0-v9-04-digital-inputs` |
-| 6 | [codex/g0-v9-06-updater](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-06-updater) | `020223048f` | `codex/g0-v9-05-outputs` |
+| 6 | [codex/g0-v9-06-updater](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-06-updater) | `faf5d2cc8b` | `codex/g0-v9-05-outputs` |
 
 The commits cover protocol/link, background SPI transport, ADC, digital inputs,
 outputs/PWM, and automatic firmware bundling/updating, respectively. Their fixes
@@ -52,3 +52,10 @@ and restore through the SPI worker. The updater includes this follow-up.
 contains the SWCLK/BOOT0 fix at `020223048f`; compare against `03800b69d6`.
 The updater drives BOOT during initialization, then releases it to input/pull-down
 on completion so H7 no longer clamps the G0 debug clock. NRST behavior is unchanged.
+
+The updater subsequently merged upstream at `79b594285f`. Build fixes on top of
+that merge are exported separately in [build_fixes](build_fixes/README.md):
+`codex/build-generated-headers` (`588b8a7a24`) recovers stale or missing generated
+headers, and `codex/build-arm-binutils` (`faf5d2cc8b`) uses the selected ARM tools
+for packaging. The second branch includes the first; the updater includes both.
+The original twelve-patch stack and historical module branches remain unchanged.

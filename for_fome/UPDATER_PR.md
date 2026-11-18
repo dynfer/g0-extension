@@ -56,3 +56,9 @@ After initialization, the updater releases BOOT0 as an input with weak pull-down
 on success and failure. STM32G071 BOOT0 shares PA14/SWCLK; retaining the former
 push-pull LOW blocked G0 debug attachment while H7 ran. Boot selection stays driven
 during reset and ROM transfers. Follow-up: `020223048f`.
+
+Following the upstream merge, the updater also recovers generated enum headers
+replaced by Git and missing generated files left behind by another build's clean.
+Packaging selects objcopy/objdump through the existing ARM toolchain Makefile,
+so the ordinary board script works without host-binutils wrappers. Review these
+build fixes separately against `79b594285f`; branch tip `faf5d2cc8b`.

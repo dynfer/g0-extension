@@ -5,6 +5,8 @@ included in the module that owns them.
 [BRANCHES.md](BRANCHES.md) lists the published fork branches and review bases.
 [UPDATER_PR.md](UPDATER_PR.md) contains the updated description for the updater PR.
 [series.json](series.json) records the exact commits and pinned G0 source.
+[build_fixes](build_fixes/README.md) contains the two build fixes added after
+the updater merged upstream at `79b594285f`.
 The source mirror in [modules](modules/) matches the final branch, and
 [patches/series](patches/series) lists the twelve patches in merge order. The
 seventh patch adds factory BOOT0 provisioning to the updater module; the eighth

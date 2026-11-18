@@ -77,7 +77,8 @@
   "published_updater_branch": {
     "branch": "codex/g0-v9-06-updater",
     "base": "52aec6335fb4abe37b7257f32132e89f046019ea",
-    "tip": "020223048face4e653269fff4a709c161257d4c1"
+    "tip": "faf5d2cc8b4d94a7c3f180ab10d607a3770d69af",
+    "upstream_merge": "79b594285f"
   },
   "companion_revision": "5fdddd58c64ee41bbe68ac9801b7139ec0e3ebbc",
   "protocol_version": 9,
@@ -85,5 +86,19 @@
   "upload_fixes_branch": "codex/g0-upload-fixes",
   "spi5_chip_selects_branch": "codex/g0-spi5-chip-selects",
   "pwm_fixes_branch": "codex/g0-pwm-fixes",
-  "boot_release_branch": "codex/g0-boot-release"
+  "boot_release_branch": "codex/g0-boot-release",
+  "build_followups": {
+    "base": "79b594285f",
+    "patch_directory": "build_fixes",
+    "commits": [
+      {
+        "branch": "codex/build-generated-headers",
+        "commit": "588b8a7a24cb02b38161c7a7c241c821305d096f"
+      },
+      {
+        "branch": "codex/build-arm-binutils",
+        "commit": "faf5d2cc8b4d94a7c3f180ab10d607a3770d69af"
+      }
+    ]
+  }
 }

@@ -128,3 +128,23 @@ while H7 runs. This newly built firmware was not flashed. The isolated build use
 the published protocol-9 stack; the user's local protocol-10 and debug edits are
 preserved when applying the source fix to the working checkout. No option bytes
 or NRST behavior were changed.
+
+Build-system follow-ups validated on 2026-11-18, based on the updater's upstream
+merge `79b594285f`:
+
+- `test_enum_generation.py` passes for firmware and bootloader contexts: cached
+  no-op, tracked enum header replaced after generation, enum input changed, enum
+  header missing, stage output missing, and missing stage manifests.
+- `test_checksum_tools.py` passes tool-selection, quoted filename, selection-failure
+  propagation and existing custom TRGT override checks. Host-tool sentinels ensure
+  packaging uses ARM tools rather than objcopy/objdump found on PATH.
+- The ordinary Atlas script builds and packages both OpenBLT and the main image
+  without wrappers. A second normal build recovers after the GPIO-name header is
+  restored from Git while both generation stamps remain present.
+- The two separate build-fix patches apply with `git am --whitespace=error` from
+  `79b594285f` and reproduce the final branch tree. Generated files are excluded
+  from both commits. The original twelve patches are unchanged.
+
+The user's untracked `firmware/tests/test_generated_make.py` was left intact.
+No hardware was flashed; the full native engine-control suite was not rerun for
+these build-rule and packaging changes.

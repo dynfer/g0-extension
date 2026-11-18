@@ -1,0 +1,158 @@
+From 588b8a7a24cb02b38161c7a7c241c821305d096f Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Wed, 18 Nov 2026 22:05:37 +0100
+Subject: [PATCH 1/2] build: regenerate stale enum headers and missing
+ generated outputs
+
+---
+ firmware/CHANGELOG.md                  |  1 +
+ firmware/fome_generated.mk             | 24 +++++++-
+ firmware/tests/test_enum_generation.py | 80 ++++++++++++++++++++++++++
+ 3 files changed, 104 insertions(+), 1 deletion(-)
+ create mode 100644 firmware/tests/test_enum_generation.py
+
+diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
+index c58d8d1a29..2ac90fe5f2 100644
+--- a/firmware/CHANGELOG.md
++++ b/firmware/CHANGELOG.md
+@@ -70,6 +70,7 @@ or
+  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
+ 
+ ### Fixed
++ - Regenerate enum names and missing generated headers before compilation when cached generation stamps survive a pull or another build directory is cleaned.
+  - Release G0 BOOT0 after initialization so its shared SWCLK pin remains available to a debugger while the ECU runs.
+  - G0 PWM accepts paused frequency values used by tachometer/speedometer outputs and follows the global PWM enable setting.
+  - Keep configured SPI5 thermocouples deselected during G0 initialization and firmware upload on Atlas.
+diff --git a/firmware/fome_generated.mk b/firmware/fome_generated.mk
+index 6174f9bb78..cf7c2877ec 100644
+--- a/firmware/fome_generated.mk
++++ b/firmware/fome_generated.mk
+@@ -13,8 +13,30 @@ LIVE_DATA_GENERATED_FILES :=
+ CONFIG_GENERATED_FILES :=
+ -include $(PROJECT_DIR)/.dep/generated_live_data_outputs.mk
+ -include $(PROJECT_DIR)/.dep/generated_config_outputs.mk
++# The manifests use paths relative to the firmware directory, including in bootloader builds.
++LIVE_DATA_GENERATED_FILES := $(addprefix $(PROJECT_DIR)/,$(LIVE_DATA_GENERATED_FILES))
++CONFIG_GENERATED_FILES := $(addprefix $(PROJECT_DIR)/,$(CONFIG_GENERATED_FILES))
+ GENERATED_FILES := $(LIVE_DATA_GENERATED_FILES) $(CONFIG_GENERATED_FILES)
+ 
++# A stamp alone cannot prove that outputs survived a clean in another build directory.
++ifneq ($(words $(wildcard $(PROJECT_DIR)/.dep/generated_live_data_outputs.mk $(LIVE_DATA_GENERATED_FILES))),$(words $(PROJECT_DIR)/.dep/generated_live_data_outputs.mk $(LIVE_DATA_GENERATED_FILES)))
++.PHONY: FORCE_LIVE_DATA
++$(LIVE_DATA_STAMP): FORCE_LIVE_DATA
++endif
++ifneq ($(words $(wildcard $(PROJECT_DIR)/.dep/generated_config_outputs.mk $(CONFIG_GENERATED_FILES))),$(words $(PROJECT_DIR)/.dep/generated_config_outputs.mk $(CONFIG_GENERATED_FILES)))
++.PHONY: FORCE_CONFIG
++$(CONFIG_STAMP): FORCE_CONFIG
++endif
++
++ENUM_INPUTS := $(addprefix $(PROJECT_DIR)/,gen_enum_to_string.sh integration/fome_config.txt \
++ controllers/algo/rusefi_hw_enums.h controllers/algo/rusefi_enums.h \
++ controllers/algo/engine_types.h controllers/sensors/sensor_type.h controllers/trigger/decoders/sync_edge.h)
++ENUM_HEADERS := $(addprefix $(PROJECT_DIR)/,controllers/algo/auto_generated_enums.h \
++ controllers/algo/auto_generated_commonenum.h controllers/algo/auto_generated_enginetypes.h \
++ controllers/sensors/auto_generated_sensor.h controllers/trigger/decoders/auto_generated_sync_edge.h)
++# Git can replace these tracked headers after generation; regenerate when newer or missing.
++$(ENUM_HEADERS): ;
++
+ JAVA_TOOLS = $(BUILDDIR)/java_tools.cookie
+ 
+ $(JAVA_TOOLS) :
+@@ -23,7 +45,7 @@ $(JAVA_TOOLS) :
+ 
+ # Stage 1: live data. Extra prerequisites (LiveData.yaml, module *.txt) come from
+ # .dep/fome_live_data.d, which is auto-included by the build rules.
+-$(LIVE_DATA_STAMP) : $(JAVA_TOOLS) $(PROJECT_DIR)/integration/LiveData.yaml
++$(LIVE_DATA_STAMP) : $(JAVA_TOOLS) $(PROJECT_DIR)/integration/LiveData.yaml $(ENUM_INPUTS) $(ENUM_HEADERS)
+ 	@echo Generating live data...
+ 	cd $(PROJECT_DIR) && ./gen_live_documentation.sh $(LIVE_DATA_STAMP)
+ 	@touch $@
+diff --git a/firmware/tests/test_enum_generation.py b/firmware/tests/test_enum_generation.py
+new file mode 100644
+index 0000000000..58be2e8e2d
+--- /dev/null
++++ b/firmware/tests/test_enum_generation.py
+@@ -0,0 +1,80 @@
++"""Exercise cached enum generation in both firmware and bootloader builds."""
++import os
++from pathlib import Path
++import subprocess
++import tempfile
++import unittest
++
++RULES = Path(__file__).resolve().parents[1] / 'fome_generated.mk'
++
++
++class EnumGenerationTest(unittest.TestCase):
++    def test_cached_headers(self):
++        for subdir in ('.', 'bootloader'):
++            with self.subTest(subdir=subdir), tempfile.TemporaryDirectory() as tmp:
++                project = Path(tmp)
++                work = project / subdir
++                work.mkdir(exist_ok=True)
++                inputs = ['integration/LiveData.yaml', 'integration/fome_config.txt',
++                          'gen_enum_to_string.sh', 'controllers/algo/rusefi_hw_enums.h',
++                          'controllers/algo/rusefi_enums.h', 'controllers/algo/engine_types.h',
++                          'controllers/sensors/sensor_type.h', 'controllers/trigger/decoders/sync_edge.h']
++                headers = ['controllers/algo/auto_generated_enums.h',
++                           'controllers/algo/auto_generated_commonenum.h',
++                           'controllers/algo/auto_generated_enginetypes.h',
++                           'controllers/sensors/auto_generated_sensor.h',
++                           'controllers/trigger/decoders/auto_generated_sync_edge.h']
++                for name in inputs + headers:
++                    p = project / name
++                    p.parent.mkdir(parents=True, exist_ok=True)
++                    p.touch()
++                    os.utime(p, (100, 100))
++                (project / '.dep').mkdir()
++                (project / 'generated').mkdir()
++                for stage, var in [('live_data', 'LIVE_DATA'), ('config', 'CONFIG')]:
++                    (project / 'generated' / stage).touch()
++                    (project / '.dep' / f'generated_{stage}_outputs.mk').write_text(
++                        f'{var}_GENERATED_FILES += generated/{stage}\n')
++                (work / 'build').mkdir()
++                for name in ['java_tools.cookie', 'generated_live_data.stamp', 'generated_config.stamp']:
++                    p = work / 'build' / name
++                    p.touch()
++                    os.utime(p, (2000000000, 2000000000))
++                (work / 'Makefile').write_text(
++                    f'all: object pch\nPROJECT_DIR = {project}\nBUILDDIR = build\n'
++                    'OBJS = object\nPCHOBJ = pch\n'
++                    f'include {RULES}\n')
++
++                def generates():
++                    result = subprocess.run(['make', '-n', 'all'], cwd=work,
++                                            check=True, capture_output=True, text=True)
++                    return './gen_live_documentation.sh' in result.stdout
++
++                self.assertFalse(generates())
++                enum = project / headers[0]
++                os.utime(enum, (2000000001, 2000000001))  # Header replaced by git pull.
++                self.assertTrue(generates())
++                os.utime(enum, (100, 100))
++                source = project / 'controllers/algo/rusefi_hw_enums.h'
++                os.utime(source, (2000000001, 2000000001))
++                self.assertTrue(generates())
++                os.utime(source, (100, 100))
++                enum.unlink()
++                self.assertTrue(generates())
++                enum.touch()
++                os.utime(enum, (100, 100))
++                (project / 'generated/config').unlink()
++                result = subprocess.run(['make', '-n', 'all'], cwd=work,
++                                        check=True, capture_output=True, text=True)
++                self.assertIn('./gen_config_board.sh', result.stdout)
++                self.assertNotIn('./gen_live_documentation.sh', result.stdout)
++                (project / 'generated/config').touch()
++                (project / 'generated/live_data').unlink()
++                self.assertTrue(generates())
++                for manifest in (project / '.dep').glob('*_outputs.mk'):
++                    manifest.unlink()
++                self.assertTrue(generates())
++
++
++if __name__ == '__main__':
++    unittest.main()
+-- 
+2.53.0
+
