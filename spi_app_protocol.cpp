@@ -23,16 +23,10 @@ public:
                           NORMALPRIO + 1, threadEntry, this);
     }
 
-    bool updateRequested() const
-    {
-        return updateRequestedFlag;
-    }
-
 private:
     static SpiAppProtocol *instance;
     chibios_rt::BinarySemaphore transferComplete{true};
     volatile bool transferFailed = false;
-    volatile bool updateRequestedFlag = false;
 
     const SPIConfig spi2Config = {
         false,
@@ -151,7 +145,7 @@ private:
                       uint8_t payloadLength)
     {
         clearFrame(txbuf);
-        txbuf.responseHeader.status = updateRequestedFlag ? protocol::statusUpdateMode : protocol::statusReady;
+        txbuf.responseHeader.status = protocol::statusReady;
         txbuf.responseHeader.result = result;
         txbuf.responseHeader.command = command;
         txbuf.responseHeader.payloadLength = payloadLength;
@@ -275,13 +269,6 @@ private:
         case protocol::cmdSetInputMode:
             setInputMode(txbuf, rxbuf);
             break;
-        case protocol::cmdEnterUpdate:
-            for (uint8_t output = 1U; output <= outputCount; output++) {
-                outputDisable(output);
-            }
-            updateRequestedFlag = true;
-            initResponse(txbuf, command, protocol::resultOk, 0U);
-            break;
         default:
             initResponse(txbuf, command, protocol::resultInvalid, 0U);
             break;
@@ -336,9 +323,4 @@ SpiAppProtocol *SpiAppProtocol::instance = &spiAppProtocol;
 void spi_app_protocol_start(void)
 {
     spiAppProtocol.start();
-}
-
-bool spi_app_protocol_update_requested(void)
-{
-    return spiAppProtocol.updateRequested();
 }

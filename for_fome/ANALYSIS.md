@@ -53,8 +53,8 @@ Findings that affect the implementation:
    pins occupy unused IDs 215..222. Native GPIO chip registration supplies pin
    ownership and deinitialization; remote PWM sends setpoints to the G0 instead
    of trying to send each edge through SPI.
-6. `cmdEnterUpdate` disables outputs and sets `updateRequestedFlag`; the main loop changes LED
-   behavior. It does not jump into the ROM bootloader. The optional new updater
+6. The unused application `cmdEnterUpdate` mode was removed; its command number
+   remains reserved and receives an unsupported-command response. The updater
    uses the dedicated BOOT and RESET lines before registering runtime I/O, checks
    image bounds/vectors, verifies every programmed block by reading it back, and
    checks the application version after reset. It never downloads a moving branch

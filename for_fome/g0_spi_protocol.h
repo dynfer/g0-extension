@@ -30,7 +30,7 @@ static constexpr uint8_t cmdSetOutput = 0x20U;
 static constexpr uint8_t cmdDisableOutput = 0x21U;
 static constexpr uint8_t cmdReadOutput = 0x22U;
 static constexpr uint8_t cmdSetInputMode = 0x30U;
-static constexpr uint8_t cmdEnterUpdate = 0xA5U;
+static constexpr uint8_t cmdEnterUpdate = 0xA5U; // Reserved; ROM entry uses BOOT0/NRST.
 
 static constexpr uint8_t statusReady = 0x00U;
 static constexpr uint8_t statusUpdateMode = 0x01U;

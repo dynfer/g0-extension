@@ -19,14 +19,7 @@ int main(void) {
     palSetLine(LINE_LED_RED);
 
     while (true) {
-        if (spi_app_protocol_update_requested()) {
-            palSetLine(LINE_LED_RED);
-            palClearLine(LINE_LED_GREEN);
-            chThdSleepMilliseconds(500);
-        }
-        else {
-            palToggleLine(LINE_LED_GREEN);
-            chThdSleepMilliseconds(100);
-        }
+        palToggleLine(LINE_LED_GREEN);
+        chThdSleepMilliseconds(100);
     }
 }

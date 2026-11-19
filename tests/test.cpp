@@ -149,6 +149,13 @@ static void testSpi()
     assert(spiAppProtocol.buildResponse(request, response));
     assert(response.versionResponse.version == G0_FIRMWARE_VERSION);
     assert(response.versionResponse.protocolVersion == wire::protocolVersion);
+    request.bytes[0] = wire::cmdEnterUpdate;
+    wire::seal(request);
+    assert(spiAppProtocol.buildResponse(request, response));
+    assert(wire::validFrame(response));
+    assert(response.responseHeader.command == wire::cmdEnterUpdate);
+    assert(response.responseHeader.status == wire::statusReady);
+    assert(response.responseHeader.result == wire::resultInvalid);
     request.bytes[0] = wire::cmdReadSent;
     wire::seal(request);
     assert(spiAppProtocol.buildResponse(request, response));
