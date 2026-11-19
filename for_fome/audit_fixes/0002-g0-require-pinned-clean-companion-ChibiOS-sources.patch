@@ -1,0 +1,46 @@
+From d3d2669bf2ade721e37ad4393b63fb7be0179384 Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Thu, 19 Nov 2026 16:15:10 +0100
+Subject: [PATCH 2/4] g0: require pinned clean companion ChibiOS sources
+
+---
+ firmware/CHANGELOG.md                    | 1 +
+ firmware/ext/g0_firmware                 | 2 +-
+ firmware/hw_layer/g0_extension/README.md | 2 ++
+ 3 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
+index 66e9257582..8fa027dde2 100644
+--- a/firmware/CHANGELOG.md
++++ b/firmware/CHANGELOG.md
+@@ -70,6 +70,7 @@ or
+  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
+ 
+ ### Fixed
++ - Reject unpinned or locally modified G0 ChibiOS sources so driver changes cannot retain an old firmware identity.
+  - Derive the G0 wire protocol from the companion submodule so FOME and its bundled firmware use the same version and frame definitions.
+  - Package firmware with the selected ARM toolchain instead of host objcopy/objdump.
+  - Regenerate enum names and missing generated headers before compilation when cached generation stamps survive a pull or another build directory is cleaned.
+diff --git a/firmware/ext/g0_firmware b/firmware/ext/g0_firmware
+index 5fdddd58c6..e1a3415e22 160000
+--- a/firmware/ext/g0_firmware
++++ b/firmware/ext/g0_firmware
+@@ -1 +1 @@
+-Subproject commit 5fdddd58c64ee41bbe68ac9801b7139ec0e3ebbc
++Subproject commit e1a3415e22c2c543391fe9a380727080a7112daf
+diff --git a/firmware/hw_layer/g0_extension/README.md b/firmware/hw_layer/g0_extension/README.md
+index 67c3a8563b..b199aa4659 100644
+--- a/firmware/hw_layer/g0_extension/README.md
++++ b/firmware/hw_layer/g0_extension/README.md
+@@ -55,6 +55,8 @@ build identity. Clean builds recreate it; unchanged inputs preserve timestamps.
+ No prepared binary/header is needed. Update the submodule pin for a new release.
+ FOME includes the wire protocol directly from that submodule, so its expected
+ protocol version and frame definitions follow the checked-out companion source.
++The companion build requires ChibiOS to be clean and at its pinned revision.
++Commit driver changes and update that pin before building a modified driver.
+ 
+ Before registering remote I/O, the updater first probes an existing G071 ROM
+ session without pulsing NRST. This preserves factory-blank entry on ROM versions
+-- 
+2.53.0
+

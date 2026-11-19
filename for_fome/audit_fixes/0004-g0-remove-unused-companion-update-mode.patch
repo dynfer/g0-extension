@@ -1,0 +1,46 @@
+From 0803b735a73173db47a9fac2e228b6dc7159e341 Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Thu, 19 Nov 2026 16:16:23 +0100
+Subject: [PATCH 4/4] g0: remove unused companion update mode
+
+---
+ firmware/CHANGELOG.md                    | 1 +
+ firmware/ext/g0_firmware                 | 2 +-
+ firmware/hw_layer/g0_extension/README.md | 2 ++
+ 3 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
+index 5b5ef73bd7..308dd6529d 100644
+--- a/firmware/CHANGELOG.md
++++ b/firmware/CHANGELOG.md
+@@ -70,6 +70,7 @@ or
+  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
+ 
+ ### Fixed
++ - Remove the unused G0 application update mode; programming continues through BOOT0/NRST.
+  - Drive G0 NRST as open drain so the companion and debugger can assert reset without contention.
+  - Reject unpinned or locally modified G0 ChibiOS sources so driver changes cannot retain an old firmware identity.
+  - Derive the G0 wire protocol from the companion submodule so FOME and its bundled firmware use the same version and frame definitions.
+diff --git a/firmware/ext/g0_firmware b/firmware/ext/g0_firmware
+index e1a3415e22..689042c9be 160000
+--- a/firmware/ext/g0_firmware
++++ b/firmware/ext/g0_firmware
+@@ -1 +1 @@
+-Subproject commit e1a3415e22c2c543391fe9a380727080a7112daf
++Subproject commit 689042c9be14f01ddf15d5a5b12f5a68a2c14dcf
+diff --git a/firmware/hw_layer/g0_extension/README.md b/firmware/hw_layer/g0_extension/README.md
+index 9d954a2070..bcdf6a7595 100644
+--- a/firmware/hw_layer/g0_extension/README.md
++++ b/firmware/hw_layer/g0_extension/README.md
+@@ -58,6 +58,8 @@ protocol version and frame definitions follow the checked-out companion source.
+ The companion build requires ChibiOS to be clean and at its pinned revision.
+ Commit driver changes and update that pin before building a modified driver.
+ 
++The application does not implement an update-mode command; ROM entry uses BOOT0/NRST.
++
+ Before registering remote I/O, the updater first probes an existing G071 ROM
+ session without pulsing NRST. This preserves factory-blank entry on ROM versions
+ that clear the EMPTY flag during startup. RESET and BOOT output latches are
+-- 
+2.53.0
+

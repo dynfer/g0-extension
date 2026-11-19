@@ -1,0 +1,79 @@
+From 0c0d85b134f618b0ef3deab0a811b9267d0322bb Mon Sep 17 00:00:00 2001
+From: dynfer <denesius20@gmail.com>
+Date: Thu, 19 Nov 2026 16:15:35 +0100
+Subject: [PATCH 3/4] g0: release NRST with an open-drain output
+
+---
+ firmware/CHANGELOG.md                                    | 1 +
+ firmware/hw_layer/g0_extension/README.md                 | 3 ++-
+ firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h | 6 +++++-
+ firmware/hw_layer/g0_extension/updater.cpp               | 3 ++-
+ 4 files changed, 10 insertions(+), 3 deletions(-)
+
+diff --git a/firmware/CHANGELOG.md b/firmware/CHANGELOG.md
+index 8fa027dde2..5b5ef73bd7 100644
+--- a/firmware/CHANGELOG.md
++++ b/firmware/CHANGELOG.md
+@@ -70,6 +70,7 @@ or
+  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
+ 
+ ### Fixed
++ - Drive G0 NRST as open drain so the companion and debugger can assert reset without contention.
+  - Reject unpinned or locally modified G0 ChibiOS sources so driver changes cannot retain an old firmware identity.
+  - Derive the G0 wire protocol from the companion submodule so FOME and its bundled firmware use the same version and frame definitions.
+  - Package firmware with the selected ARM toolchain instead of host objcopy/objdump.
+diff --git a/firmware/hw_layer/g0_extension/README.md b/firmware/hw_layer/g0_extension/README.md
+index b199aa4659..9d954a2070 100644
+--- a/firmware/hw_layer/g0_extension/README.md
++++ b/firmware/hw_layer/g0_extension/README.md
+@@ -61,7 +61,8 @@ Commit driver changes and update that pin before building a modified driver.
+ Before registering remote I/O, the updater first probes an existing G071 ROM
+ session without pulsing NRST. This preserves factory-blank entry on ROM versions
+ that clear the EMPTY flag during startup. RESET and BOOT output latches are
+-preloaded high before enabling their GPIO drivers. At updater completion, BOOT
++preloaded high before enabling their GPIO drivers. RESET uses open drain with
++a pull-up so the G0 or a debugger can assert reset while FOME releases it. At updater completion, BOOT
+ is released to input mode with a weak pull-down on both success and failure:
+ G071 BOOT0 shares PA14/SWCLK and must not be driven during normal debugging.
+ Atlas also keeps PB14/NRST
+diff --git a/firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h b/firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h
+index e22f6b697c..2f5012c206 100644
+--- a/firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h
++++ b/firmware/hw_layer/g0_extension/tests/updater_mocks/pch.h
+@@ -13,6 +13,8 @@ struct SPIDriver {};
+ struct SPIConfig {};
+ constexpr unsigned PAL_MODE_OUTPUT_PUSHPULL = 1;
+ constexpr unsigned PAL_MODE_INPUT_PULLDOWN = 2;
++constexpr unsigned PAL_MODE_OUTPUT_OPENDRAIN = 4;
++constexpr unsigned PAL_STM32_PUPDR_PULLUP = 8;
+ inline bool testPins[] = {true, false};
+ inline bool testPinOutputs[2] = {};
+ inline std::vector<Gpio> testResetPulses;
+@@ -53,7 +55,9 @@ inline unsigned getHwPin(const char*, Gpio pin) {
+ 	return pin;
+ }
+ void palWritePad(unsigned, unsigned pin, bool high);
+-inline void efiSetPadMode(const char*, Gpio pin, unsigned) {
++inline void efiSetPadMode(const char*, Gpio pin, unsigned mode) {
++	assert(mode == (pin == Gpio::B14 ? PAL_MODE_OUTPUT_OPENDRAIN | PAL_STM32_PUPDR_PULLUP
++								  : PAL_MODE_OUTPUT_PUSHPULL));
+ 	assert(testPins[pin]); // Preload both latches HIGH before enabling either
+ 						   // output driver.
+ 	testPinOutputs[pin] = true;
+diff --git a/firmware/hw_layer/g0_extension/updater.cpp b/firmware/hw_layer/g0_extension/updater.cpp
+index c883d338a2..3cd1a44a55 100644
+--- a/firmware/hw_layer/g0_extension/updater.cpp
++++ b/firmware/hw_layer/g0_extension/updater.cpp
+@@ -92,7 +92,8 @@ bool updateFirmware(SPIDriver& spi, const SPIConfig& spiSettings, brain_pin_e re
+ 	pin(resetPin, true);
+ 	pin(bootPin, true);
+ 	efiSetPadMode("G0 BOOT", bootPin, PAL_MODE_OUTPUT_PUSHPULL);
+-	efiSetPadMode("G0 RESET", resetPin, PAL_MODE_OUTPUT_PUSHPULL);
++	// Release NRST when HIGH so the G0 and debugger can also assert reset.
++	efiSetPadMode("G0 RESET", resetPin, PAL_MODE_OUTPUT_OPENDRAIN | PAL_STM32_PUPDR_PULLUP);
+ 	spiAcquireBus(&spi);
+ 	spiStart(&spi, &spiSettings);
+ 	chThdSleepMilliseconds(100);
+-- 
+2.53.0
+

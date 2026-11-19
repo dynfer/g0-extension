@@ -148,3 +148,24 @@ merge `79b594285f`:
 The user's untracked `firmware/tests/test_generated_make.py` was left intact.
 No hardware was flashed; the full native engine-control suite was not rerun for
 these build-rule and packaging changes.
+
+Selected audit follow-ups validated on 2026-11-19:
+
+- All four host and both slave/version CTest groups pass with sanitizers; the
+  actual FOME module tests pass as well. Existing suites were extended for the
+  source-only build dependency, pinned/clean ChibiOS rejection, reset mode and
+  unsupported update command.
+- A native build with a temporary companion header using protocol 1234 compiles
+  every translation unit with an assertion for that version; all four groups
+  pass without changing the host protocol wrapper.
+- After cleaning both bootloader and application build directories, the normal
+  Atlas board script builds and packages the entire firmware successfully.
+- The 12,016-byte G0 image occurs exactly once in packaged `fome.bin`; the bundled
+  identity matches `0x26fa15cb`. Offline GDB reports protocol 9 in both ELF files.
+- All four patches in [audit_fixes](audit_fixes/README.md) apply from `de73644150`
+  using `git am --whitespace=error` and reproduce the final branch tree. The source
+  mirror matches FOME exactly. Generated and unrelated user files are excluded.
+
+The full native engine-control suite was not rerun. No hardware was flashed;
+NRST electrical behavior still needs a bench check. SPI timeout/recovery was
+explicitly skipped, so its existing failure-mode limitations remain.

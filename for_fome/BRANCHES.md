@@ -59,3 +59,9 @@ that merge are exported separately in [build_fixes](build_fixes/README.md):
 headers, and `codex/build-arm-binutils` (`faf5d2cc8b`) uses the selected ARM tools
 for packaging. The second branch includes the first; the updater includes both.
 The original twelve-patch stack and historical module branches remain unchanged.
+
+The selected 2026-11-19 audit fixes have four separate cumulative branches on top
+of `de73644150`: companion-owned protocol, clean pinned ChibiOS, open-drain NRST,
+and unused update-mode removal. See [audit_fixes](audit_fixes/README.md) for
+commit IDs, review bases and matching G0 source branches. SPI timeout changes
+were skipped. Existing updater/module branches were preserved.
