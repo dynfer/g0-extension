@@ -41,3 +41,8 @@ packages the bootloader, application and companion. The 12,016-byte G0 image
 occurs exactly once in `fome.bin`; identity is `0x26fa15cb`. Both compiled images
 report protocol 9. The full engine-control suite was not rerun. Nothing was
 flashed; physical reset/debug behavior and SPI fault recovery need bench testing.
+
+The existing PR branches `codex/g0-v9-01-protocol` through
+`codex/g0-v9-06-updater` now include these fixes in their owning modules too;
+see [BRANCHES.md](../BRANCHES.md) for current PR tips. The separate four audit
+branches above remain available for reviewing the individual fixes.

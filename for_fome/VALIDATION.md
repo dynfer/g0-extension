@@ -169,3 +169,18 @@ Selected audit follow-ups validated on 2026-11-19:
 The full native engine-control suite was not rerun. No hardware was flashed;
 NRST electrical behavior still needs a bench check. SPI timeout/recovery was
 explicitly skipped, so its existing failure-mode limitations remain.
+
+The six open G0 PR branches were refreshed on 2026-11-19:
+
+- Protocol, transport, ADC and digital-input branches each pass their standalone
+  sanitizer suite; the output branch passes both groups, and the updater passes
+  all four groups.
+- All six branches use the companion protocol header pinned at `689042c9be`.
+  Source initialization is carried by the transport PR, without bundling firmware
+  in runtime-only branches. The updater retains the clean/pinned ChibiOS guard,
+  open-drain reset and removed application update mode.
+- The updater's production files match the already validated Atlas build; only
+  its module README differs. The mirror was updated to that README. A second ARM
+  build and hardware flashing were not needed for these branch-history updates.
+- Every remote PR branch advances from its original published tip and contains
+  its updated predecessor. Updates were pushed atomically without force.

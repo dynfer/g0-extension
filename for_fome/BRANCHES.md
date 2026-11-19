@@ -5,12 +5,12 @@ follow-up commit for factory BOOT0 provisioning.
 
 | Part | Fork branch | Tip | Review base |
 | --- | --- | --- | --- |
-| 1 | [codex/g0-v9-01-protocol](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-01-protocol) | `79a891adea` | `upstream/master` |
-| 2 | [codex/g0-v9-02-spi-transport](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-02-spi-transport) | `718fb0b349` | `codex/g0-v9-01-protocol` |
-| 3 | [codex/g0-v9-03-adc](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-03-adc) | `ea0e3babbf` | `codex/g0-v9-02-spi-transport` |
-| 4 | [codex/g0-v9-04-digital-inputs](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-04-digital-inputs) | `4cd04606e8` | `codex/g0-v9-03-adc` |
-| 5 | [codex/g0-v9-05-outputs](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-05-outputs) | `52aec6335f` | `codex/g0-v9-04-digital-inputs` |
-| 6 | [codex/g0-v9-06-updater](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-06-updater) | `faf5d2cc8b` | `codex/g0-v9-05-outputs` |
+| 1 | [codex/g0-v9-01-protocol](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-01-protocol) | `df6242034c` | `upstream/master` |
+| 2 | [codex/g0-v9-02-spi-transport](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-02-spi-transport) | `e42ff048b0` | `codex/g0-v9-01-protocol` |
+| 3 | [codex/g0-v9-03-adc](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-03-adc) | `424ef76014` | `codex/g0-v9-02-spi-transport` |
+| 4 | [codex/g0-v9-04-digital-inputs](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-04-digital-inputs) | `d1094be3bf` | `codex/g0-v9-03-adc` |
+| 5 | [codex/g0-v9-05-outputs](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-05-outputs) | `b6be688edb` | `codex/g0-v9-04-digital-inputs` |
+| 6 | [codex/g0-v9-06-updater](https://github.com/dynfer/fome-fw/tree/codex/g0-v9-06-updater) | `6a3f688af2` | `codex/g0-v9-05-outputs` |
 
 The commits cover protocol/link, background SPI transport, ADC, digital inputs,
 outputs/PWM, and automatic firmware bundling/updating, respectively. Their fixes
@@ -19,7 +19,7 @@ and tests are contained in the owning module.
 For incremental review, compare each branch with the review base above. Submit
 upstream PRs in this order; a later branch compared against upstream master also
 includes its prerequisites until they merge. The final branch builds and bundles
-G0 source revision `5fdddd58c6` automatically using the ROM updater. It enables
+G0 source revision `689042c9be` automatically using the ROM updater. It enables
 BOOT0 selection on factory-blank G071 devices before programming main flash.
 
 [codex/g0-option-provisioning](https://github.com/dynfer/fome-fw/tree/codex/g0-option-provisioning)
@@ -65,3 +65,11 @@ of `de73644150`: companion-owned protocol, clean pinned ChibiOS, open-drain NRST
 and unused update-mode removal. See [audit_fixes](audit_fixes/README.md) for
 commit IDs, review bases and matching G0 source branches. SPI timeout changes
 were skipped. Existing updater/module branches were preserved.
+
+Open PRs [#865](https://github.com/FOME-Tech/fome-fw/pull/865) through
+[#870](https://github.com/FOME-Tech/fome-fw/pull/870) were refreshed on 2026-11-19.
+The protocol PR now owns the companion source pin and shared header; the transport
+PR initializes its source-only build dependency. Each subsequent branch merges
+its updated predecessor. The updater also includes all four selected audit fixes.
+All updates preserve published history and module boundaries; no force-pushes
+were used. The original patch export and `series.json` retain their historical IDs.
