@@ -16,6 +16,11 @@ def fingerprint(root, compiler, options):
             digest.update(path.relative_to(root).as_posix().encode() + b"\0")
             digest.update(path.read_bytes() + b"\0")
     revision = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD:ChibiOS"])
+    chibios = ["git", "-C", str(root / "ChibiOS")]
+    if (subprocess.check_output([*chibios, "rev-parse", "HEAD"]) != revision or
+            subprocess.check_output([*chibios, "status", "--porcelain", "--untracked-files=all"])):
+        raise ValueError("ChibiOS must be clean and match its pinned revision; "
+                         "commit driver changes and update the submodule pin before building")
     compiler_version = subprocess.check_output([compiler, "--version"])
     digest.update(revision + compiler_version + options.encode())
     return int.from_bytes(digest.digest()[:4], "little") or 1
@@ -28,7 +33,10 @@ def main():
     parser.add_argument("--compiler", required=True)
     parser.add_argument("--options", default="")
     args = parser.parse_args()
-    version = fingerprint(args.root.resolve(), args.compiler, args.options)
+    try:
+        version = fingerprint(args.root.resolve(), args.compiler, args.options)
+    except ValueError as error:
+        parser.error(str(error))
     content = f"#pragma once\n#define G0_FIRMWARE_VERSION 0x{version:08x}U\n"
     args.output.parent.mkdir(parents=True, exist_ok=True)
     if not args.output.exists() or args.output.read_text() != content:

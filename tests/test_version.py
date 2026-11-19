@@ -21,8 +21,16 @@ class VersionTests(unittest.TestCase):
         self.header = self.root / "build/g0_firmware_version.h"
 
     def fingerprint(self, options="-Os", revision=b"abc", compiler=b"gcc 11.3"):
-        with patch.object(generator.subprocess, "check_output", side_effect=[revision, compiler]):
+        with patch.object(generator.subprocess, "check_output", side_effect=[revision, revision, b"", compiler]):
             return generator.fingerprint(self.root, "gcc", options)
+
+    def test_rejects_unpinned_or_dirty_chibios(self):
+        for replies in [[b"abc", b"def"], [b"abc", b"abc", b" M driver.c"],
+                        [b"abc", b"abc", b"?? driver.c"]]:
+            with self.subTest(replies=replies), patch.object(
+                    generator.subprocess, "check_output", side_effect=replies):
+                with self.assertRaisesRegex(ValueError, "ChibiOS must be clean"):
+                    generator.fingerprint(self.root, "gcc", "-Os")
 
     def test_identity_tracks_build_inputs(self):
         first = self.fingerprint()
@@ -40,7 +48,8 @@ class VersionTests(unittest.TestCase):
         argv = [str(GENERATOR), "--root", str(self.root), "--output", str(self.header),
                 "--compiler", "gcc"]
         with patch.object(sys, "argv", argv), patch.object(
-                generator.subprocess, "check_output", return_value=b"fixed"):
+                generator.subprocess, "check_output",
+                side_effect=lambda command: b"" if "status" in command else b"fixed"):
             generator.main()
             self.assertRegex(self.header.read_text(), r"#define G0_FIRMWARE_VERSION 0x[0-9a-f]{8}U")
             original = self.header.read_text()
